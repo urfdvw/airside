@@ -233,8 +233,68 @@ function PlayerPage() {
   const session = useMemo(() => new PlayerSession(params.get('peer') ?? '', params.get('token') ?? ''), [params]);
   const state = useSyncExternalStore(session.subscribe, session.getSnapshot);
   const [tab, setTab] = useState<'library' | 'player'>('library');
+  const scrollSurface = useRef<HTMLElement>(null);
   useEffect(() => { session.start(); return () => session.destroy(); }, [session]);
   useEffect(() => { if (state.playback.trackId) setTab('player'); }, [state.playback.trackId]);
+  useEffect(() => {
+    const surface = scrollSurface.current;
+    if (!surface || tab !== 'library') return;
+    let startY = 0;
+    let startScroll = 0;
+    let lastY = 0;
+    let lastTime = 0;
+    let velocity = 0;
+    let frame = 0;
+
+    const stopMomentum = () => { cancelAnimationFrame(frame); frame = 0; };
+    const touchStart = (event: TouchEvent) => {
+      if (event.touches.length !== 1) return;
+      stopMomentum();
+      startY = lastY = event.touches[0].clientY;
+      startScroll = surface.scrollTop;
+      lastTime = performance.now();
+      velocity = 0;
+    };
+    const touchMove = (event: TouchEvent) => {
+      if (event.touches.length !== 1) return;
+      const y = event.touches[0].clientY;
+      const now = performance.now();
+      const distance = y - startY;
+      if (Math.abs(distance) < 3) return;
+      event.preventDefault();
+      surface.scrollTop = startScroll - distance;
+      velocity = (y - lastY) / Math.max(1, now - lastTime);
+      lastY = y;
+      lastTime = now;
+    };
+    const touchEnd = () => {
+      const coast = () => {
+        if (Math.abs(velocity) < 0.02) { frame = 0; return; }
+        surface.scrollTop -= velocity * 16;
+        velocity *= 0.92;
+        frame = requestAnimationFrame(coast);
+      };
+      frame = requestAnimationFrame(coast);
+    };
+    const scrollUp = () => surface.scrollBy({ top: -96, behavior: 'smooth' });
+    const scrollDown = () => surface.scrollBy({ top: 96, behavior: 'smooth' });
+
+    surface.addEventListener('touchstart', touchStart, { passive: true });
+    surface.addEventListener('touchmove', touchMove, { passive: false });
+    surface.addEventListener('touchend', touchEnd, { passive: true });
+    surface.addEventListener('touchcancel', touchEnd, { passive: true });
+    window.addEventListener('scrollUp', scrollUp);
+    window.addEventListener('scrollDown', scrollDown);
+    return () => {
+      stopMomentum();
+      surface.removeEventListener('touchstart', touchStart);
+      surface.removeEventListener('touchmove', touchMove);
+      surface.removeEventListener('touchend', touchEnd);
+      surface.removeEventListener('touchcancel', touchEnd);
+      window.removeEventListener('scrollUp', scrollUp);
+      window.removeEventListener('scrollDown', scrollDown);
+    };
+  }, [tab]);
   const current = state.tracks.find((track) => track.id === state.playback.trackId);
   const progress = state.playback.duration ? Math.min(100, state.playback.position / state.playback.duration * 100) : 0;
 
@@ -242,7 +302,7 @@ function PlayerPage() {
     {state.error && <div className="mobile-error" role="alert"><AlertCircle size={18} /><span>{state.error}</span>{state.status === 'disconnected' && <button onClick={session.start}><RefreshCw size={16} />Reconnect</button>}</div>}
     {state.streamReady && !state.audioEnabled && <button className="enable-audio" onClick={session.enableAudio}><Volume2 size={19} />Tap to enable audio</button>}
 
-    <main className="mobile-main">
+    <main className="mobile-main" ref={scrollSurface}>
       {tab === 'library' ? <section className={`mobile-library ${current ? 'has-mini-player' : ''}`}>
         <div className="mobile-title"><div><h1>{state.folder || 'Music'}</h1></div><span>{state.tracks.length} tracks</span></div>
         {state.status === 'connecting' || state.loadingLibrary ? <div className="mobile-empty"><LoaderCircle className="spin" /><strong>Connecting to your desktop…</strong><span>Keep the Airside page open there.</span></div>

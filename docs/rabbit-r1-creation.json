@@ -1,6 +1,6 @@
 {
   "title": "Airside",
-  "url": "https://urfdvw.github.io/airside/#/login",
+  "url": "https://urfdvw.github.io/airside/#/login?r1=1",
   "description": "Connect to your desktop music library and play it on this device.",
   "iconUrl": "https://raw.githubusercontent.com/urfdvw/airside/refs/heads/main/docs/favicon.svg",
   "themeColor": "#d9efa1"

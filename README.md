@@ -10,7 +10,7 @@ Scan this creation QR on a Rabbit r1 to open Airside’s login page:
 
 ![Airside Rabbit r1 creation QR](docs/rabbit-r1-qr.png)
 
-The build generates this image from the Rabbit creation JSON format used by [`rabbit-hmi-oss/creations-sdk`](https://github.com/rabbit-hmi-oss/creations-sdk). The encoded URL is `https://urfdvw.github.io/airside/#/login`.
+The build generates this image from the Rabbit creation JSON format used by [`rabbit-hmi-oss/creations-sdk`](https://github.com/rabbit-hmi-oss/creations-sdk). The encoded URL is `https://urfdvw.github.io/airside/#/login?r1=1`.
 
 ## Run locally
 
