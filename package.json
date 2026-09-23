@@ -1,0 +1,40 @@
+{
+  "name": "fake-media-server",
+  "version": "1.0.0",
+  "description": "A browser-only local music library and peer-to-peer mobile player.",
+  "private": true,
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "test": "node --test --experimental-strip-types src/lib/protocol.test.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/urfdvw/fake-media-server.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/urfdvw/fake-media-server/issues"
+  },
+  "homepage": "https://github.com/urfdvw/fake-media-server#readme",
+  "dependencies": {
+    "lucide-react": "^1.47.0",
+    "peerjs": "^1.5.5",
+    "qrcode": "^1.5.4",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/wicg-file-system-access": "^2023.10.7",
+    "@vitejs/plugin-react": "^6.1.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.0"
+  }
+}
