@@ -7,7 +7,14 @@ import { AUDIO_BITRATE, PUBLIC_APP_URL, formatTime, hostPeerId, isPin, loginUrl,
 function App() {
   const [route, setRoute] = useState(window.location.hash);
   useEffect(() => {
-    const update = () => setRoute(window.location.hash);
+    const update = () => {
+      if ('PluginMessageHandler' in window || window.location.hash.includes('r1=1')) {
+        document.documentElement.classList.add('rabbit-r1');
+        document.querySelector<HTMLMetaElement>('meta[name="viewport"]')?.setAttribute('content', 'width=240, initial-scale=1.0, user-scalable=no');
+      }
+      setRoute(window.location.hash);
+    };
+    update();
     window.addEventListener('hashchange', update);
     return () => window.removeEventListener('hashchange', update);
   }, []);
