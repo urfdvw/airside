@@ -321,6 +321,8 @@ export class PlayerSession extends Store<PlayerState> {
   private call: MediaConnection | null = null;
   private audio = new Audio();
   private timer?: ReturnType<typeof setInterval>;
+  private playbackTimer?: ReturnType<typeof setInterval>;
+  private playbackTick = 0;
   private lastMessage = 0;
   private pendingTracks: Track[] = [];
   private receivedError = false;
@@ -345,6 +347,7 @@ export class PlayerSession extends Store<PlayerState> {
       return;
     }
     this.bitrateSample = null;
+    this.playbackTick = performance.now();
     this.patch({ status: 'connecting', error: null, audioEnabled: false, streamReady: false, bitrateKbps: null });
     this.lastMessage = Date.now();
     const peer = new Peer();
@@ -386,7 +389,18 @@ export class PlayerSession extends Store<PlayerState> {
         ? 'Connection timed out. Check that the desktop is online. Some networks block direct connections.'
         : 'Desktop connection lost. Keep its tab open and tap Reconnect.');
     }, 1000);
+    this.playbackTimer = setInterval(() => this.advancePlaybackClock(), 250);
   };
+
+  private advancePlaybackClock() {
+    const now = performance.now();
+    const elapsed = Math.max(0, (now - this.playbackTick) / 1000);
+    this.playbackTick = now;
+    const playback = this.state.playback;
+    if (playback.phase !== 'playing' || !playback.duration || elapsed <= 0) return;
+    const position = Math.min(playback.duration, playback.position + elapsed);
+    if (position !== playback.position) this.patch({ playback: { ...playback, position } });
+  }
 
   private receive(data: unknown) {
     if (!isRecord(data)) return;
@@ -402,6 +416,7 @@ export class PlayerSession extends Store<PlayerState> {
     } else if (data.type === 'library-end') {
       this.patch({ tracks: this.pendingTracks, loadingLibrary: false });
     } else if (data.type === 'state' && isPlayback(data.playback)) {
+      this.playbackTick = performance.now();
       const started = data.playback.phase === 'playing' && this.state.playback.phase !== 'playing';
       if (started) this.bitrateSample = null;
       this.patch({ playback: data.playback, ...(started || data.playback.phase !== 'playing' ? { bitrateKbps: null } : {}) });
@@ -495,6 +510,7 @@ export class PlayerSession extends Store<PlayerState> {
 
   private cleanup() {
     clearInterval(this.timer);
+    clearInterval(this.playbackTimer);
     const connection = this.connection;
     const call = this.call;
     this.connection = null;

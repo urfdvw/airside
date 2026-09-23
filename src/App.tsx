@@ -244,13 +244,31 @@ function PlayerPage() {
   const [volumeVisible, setVolumeVisible] = useState(false);
   const scrollSurface = useRef<HTMLElement>(null);
   const seekPositionRef = useRef<number | null>(null);
+  const seekAwaitingSync = useRef(false);
+  const seekReleaseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const volumeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => { session.start(); return () => session.destroy(); }, [session]);
+  useEffect(() => {
+    session.start();
+    return () => {
+      if (seekReleaseTimer.current) clearTimeout(seekReleaseTimer.current);
+      session.destroy();
+    };
+  }, [session]);
   useEffect(() => { if (state.playback.trackId) setTab('player'); }, [state.playback.trackId]);
   useEffect(() => {
     seekPositionRef.current = null;
+    seekAwaitingSync.current = false;
     setSeekPosition(null);
+    if (seekReleaseTimer.current) clearTimeout(seekReleaseTimer.current);
   }, [state.playback.trackId]);
+  useEffect(() => {
+    const pending = seekPositionRef.current;
+    if (!seekAwaitingSync.current || pending === null || Math.abs(state.playback.position - pending) > 1.25) return;
+    seekPositionRef.current = null;
+    seekAwaitingSync.current = false;
+    setSeekPosition(null);
+    if (seekReleaseTimer.current) clearTimeout(seekReleaseTimer.current);
+  }, [state.playback.position]);
   useEffect(() => {
     const adjust = (change: number) => {
       session.adjustVolume(change);
@@ -268,6 +286,11 @@ function PlayerPage() {
       if (volumeTimer.current) clearTimeout(volumeTimer.current);
     };
   }, [session]);
+  useEffect(() => {
+    const togglePlayback = () => session.command({ type: state.playback.phase === 'playing' ? 'pause' : 'play' });
+    window.addEventListener('sideClick', togglePlayback);
+    return () => window.removeEventListener('sideClick', togglePlayback);
+  }, [session, state.playback.phase]);
   useEffect(() => {
     const surface = scrollSurface.current;
     if (!surface || tab !== 'library') return;
@@ -324,15 +347,22 @@ function PlayerPage() {
   const displayedPosition = seekPosition ?? state.playback.position;
   const progress = state.playback.duration ? Math.min(100, displayedPosition / state.playback.duration * 100) : 0;
   const updateSeek = (position: number) => {
+    seekAwaitingSync.current = false;
+    if (seekReleaseTimer.current) clearTimeout(seekReleaseTimer.current);
     seekPositionRef.current = position;
     setSeekPosition(position);
   };
   const commitSeek = () => {
     const position = seekPositionRef.current;
     if (position === null) return;
-    seekPositionRef.current = null;
-    setSeekPosition(null);
+    seekAwaitingSync.current = true;
     session.command({ type: 'seek', position });
+    if (seekReleaseTimer.current) clearTimeout(seekReleaseTimer.current);
+    seekReleaseTimer.current = setTimeout(() => {
+      seekPositionRef.current = null;
+      seekAwaitingSync.current = false;
+      setSeekPosition(null);
+    }, 1600);
   };
 
   return <div className="phone-shell">
