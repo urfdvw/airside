@@ -112,6 +112,20 @@ export class AudioEngine {
     if (this.state.phase === 'playing') this.update({ phase: 'paused' });
   }
 
+  seek(position: number) {
+    if (!this.buffer || !Number.isFinite(position)) return;
+    const wasPlaying = this.state.phase === 'playing';
+    this.stopSource();
+    this.offset = Math.max(0, Math.min(this.buffer.duration, position));
+    if (this.offset >= this.buffer.duration) {
+      this.wantsPlay = false;
+      this.update({ phase: 'paused', position: this.offset });
+      return;
+    }
+    this.update({ phase: 'paused', position: this.offset, error: null });
+    if (wasPlaying) this.play();
+  }
+
   reset() {
     ++this.revision;
     this.stopSource();

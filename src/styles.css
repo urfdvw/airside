@@ -105,9 +105,18 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .back-library { align-self: flex-start; margin-left: -8px; border: 0; background: transparent; display: flex; align-items: center; gap: 2px; font-size: 11px; color: #666b64; cursor: pointer; }
 .album-art { width: min(76vw, 330px); aspect-ratio: 1; background: #dce8bd; border-radius: 19px; margin: 26px auto 30px; display: grid; place-items: center; overflow: hidden; box-shadow: 0 24px 50px rgba(54,67,45,.17); }.record-rings { width: 77%; height: 77%; border-radius: 50%; background: repeating-radial-gradient(circle at center, #283028 0 3px, #323a31 4px 7px); display: grid; place-items: center; box-shadow: 0 0 0 1px #222; }.record-label { width: 35%; height: 35%; border-radius: 50%; background: #d9efa1; display: grid; place-items: center; color: #34402e; }.album-art.playing .record-rings { animation: rotate 8s linear infinite; } @keyframes rotate { to { transform: rotate(360deg); } }
 .phone-track-meta { text-align: center; }.phone-track-meta p { margin: 0 0 10px; font-size: 9px; }.phone-track-meta h1 { font-size: clamp(24px, 7vw, 34px); line-height: 1.1; letter-spacing: -.045em; margin: 0 auto 9px; max-width: 440px; overflow-wrap: anywhere; }.phone-track-meta span { display: block; color: #7b8078; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.progress { margin: 28px 0 15px; }.progress-line { height: 3px; border-radius: 5px; background: #d8dad3; overflow: hidden; }.progress-line span { display: block; height: 100%; background: #536a40; transition: width .4s linear; }.progress > div:last-child { display: flex; justify-content: space-between; font: 9px 'DM Mono', monospace; color: #8a8e86; margin-top: 8px; }
+.progress { margin: 28px 0 15px; }
+.progress-slider { --progress: 0%; width: 100%; height: 28px; margin: 0; padding: 0; appearance: none; -webkit-appearance: none; border: 0; background: transparent; cursor: pointer; touch-action: none; }
+.progress-slider::-webkit-slider-runnable-track { height: 4px; border-radius: 5px; background: linear-gradient(to right, #536a40 0 var(--progress), #d8dad3 var(--progress) 100%); }
+.progress-slider::-webkit-slider-thumb { width: 18px; height: 18px; margin-top: -7px; appearance: none; -webkit-appearance: none; border: 3px solid #f7f6f1; border-radius: 50%; background: #536a40; box-shadow: 0 1px 5px rgba(37,42,37,.3); }
+.progress-slider::-moz-range-track { height: 4px; border: 0; border-radius: 5px; background: #d8dad3; }
+.progress-slider::-moz-range-progress { height: 4px; border-radius: 5px; background: #536a40; }
+.progress-slider::-moz-range-thumb { width: 14px; height: 14px; border: 3px solid #f7f6f1; border-radius: 50%; background: #536a40; box-shadow: 0 1px 5px rgba(37,42,37,.3); }
+.progress-slider:disabled { cursor: default; opacity: .55; }
+.progress > div:last-child { display: flex; justify-content: space-between; font: 9px 'DM Mono', monospace; color: #8a8e86; margin-top: 2px; }
 .phone-controls { display: flex; align-items: center; justify-content: center; gap: 34px; margin: 7px 0 21px; }.phone-controls button { border: 0; background: transparent; width: 44px; height: 44px; display: grid; place-items: center; cursor: pointer; }.phone-controls button:disabled { opacity: .35; }.phone-controls .phone-play { background: #252a25; color: white; border-radius: 50%; width: 68px; height: 68px; box-shadow: 0 9px 20px rgba(37,42,37,.2); }
 .playback-error { color: #9a5145; text-align: center; font-size: 10px; margin: -10px 0 14px; }
+.volume-toast { position: absolute; z-index: 9; left: 50%; bottom: calc(86px + env(safe-area-inset-bottom)); transform: translateX(-50%); min-width: 72px; height: 34px; padding: 0 12px; display: flex; align-items: center; justify-content: center; gap: 7px; border-radius: 18px; color: white; background: rgba(37,42,37,.92); font: 10px 'DM Mono', monospace; pointer-events: none; }
 
 /* Pairing login */
 .login-shell { width: 100%; height: 100dvh; overflow: hidden; display: grid; place-items: center; padding: 18px; background: radial-gradient(circle at 50% 0, rgba(217,239,161,.35), transparent 26rem), #f3f2ec; }
@@ -273,9 +282,11 @@ html.rabbit-r1, html.rabbit-r1 body, html.rabbit-r1 #root { width: 240px; height
 .rabbit-r1 .phone-track-meta h1 { margin-bottom: 3px; font-size: 17px; line-height: 1; }
 .rabbit-r1 .phone-track-meta span { font-size: 8px; }
 .rabbit-r1 .progress { margin: 8px 0 2px; }
+.rabbit-r1 .progress-slider { height: 28px; }
 .rabbit-r1 .progress > div:last-child { margin-top: 4px; font-size: 7px; }
 .rabbit-r1 .phone-controls { gap: 12px; margin: 0 0 4px; }
 .rabbit-r1 .phone-controls button { width: 44px; height: 44px; }
 .rabbit-r1 .phone-controls .phone-play { width: 48px; height: 48px; }
 .rabbit-r1 .playback-error { margin: 0 0 3px; font-size: 7px; }
+.rabbit-r1 .volume-toast { bottom: 58px; height: 28px; min-width: 60px; padding-inline: 9px; font-size: 8px; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; } }

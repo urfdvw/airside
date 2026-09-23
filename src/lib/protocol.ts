@@ -36,7 +36,8 @@ export type Command =
   | { type: 'play'; trackId?: string }
   | { type: 'pause' }
   | { type: 'next' }
-  | { type: 'previous' };
+  | { type: 'previous' }
+  | { type: 'seek'; position: number };
 export type HostMessage =
   | { type: 'welcome'; version: number }
   | { type: 'library-start'; folder: string }
@@ -52,9 +53,9 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 
 export function isCommand(value: unknown): value is Command {
   if (!isRecord(value)) return false;
-  return value.type === 'play'
-    ? value.trackId === undefined || typeof value.trackId === 'string'
-    : ['pause', 'next', 'previous'].includes(String(value.type));
+  if (value.type === 'play') return value.trackId === undefined || typeof value.trackId === 'string';
+  if (value.type === 'seek') return typeof value.position === 'number' && Number.isFinite(value.position) && value.position >= 0;
+  return ['pause', 'next', 'previous'].includes(String(value.type));
 }
 
 export function isPlayback(value: unknown): value is Playback {

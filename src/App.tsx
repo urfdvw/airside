@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
 import QRCode from 'qrcode';
 import { AlertCircle, Camera, ChevronLeft, FolderOpen, Library, LoaderCircle, Music2, Pause, Play, Radio, RefreshCw, ScanLine, SkipBack, SkipForward, Smartphone, Unplug, Volume2, Wifi, X } from 'lucide-react';
 import { HostSession, PlayerSession } from './lib/session';
@@ -240,9 +240,34 @@ function PlayerPage() {
   const session = useMemo(() => new PlayerSession(params.get('peer') ?? '', params.get('token') ?? ''), [params]);
   const state = useSyncExternalStore(session.subscribe, session.getSnapshot);
   const [tab, setTab] = useState<'library' | 'player'>('library');
+  const [seekPosition, setSeekPosition] = useState<number | null>(null);
+  const [volumeVisible, setVolumeVisible] = useState(false);
   const scrollSurface = useRef<HTMLElement>(null);
+  const seekPositionRef = useRef<number | null>(null);
+  const volumeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => { session.start(); return () => session.destroy(); }, [session]);
   useEffect(() => { if (state.playback.trackId) setTab('player'); }, [state.playback.trackId]);
+  useEffect(() => {
+    seekPositionRef.current = null;
+    setSeekPosition(null);
+  }, [state.playback.trackId]);
+  useEffect(() => {
+    const adjust = (change: number) => {
+      session.adjustVolume(change);
+      setVolumeVisible(true);
+      if (volumeTimer.current) clearTimeout(volumeTimer.current);
+      volumeTimer.current = setTimeout(() => setVolumeVisible(false), 900);
+    };
+    const volumeUp = () => adjust(0.05);
+    const volumeDown = () => adjust(-0.05);
+    window.addEventListener('scrollUp', volumeUp);
+    window.addEventListener('scrollDown', volumeDown);
+    return () => {
+      window.removeEventListener('scrollUp', volumeUp);
+      window.removeEventListener('scrollDown', volumeDown);
+      if (volumeTimer.current) clearTimeout(volumeTimer.current);
+    };
+  }, [session]);
   useEffect(() => {
     const surface = scrollSurface.current;
     if (!surface || tab !== 'library') return;
@@ -283,27 +308,32 @@ function PlayerPage() {
       };
       frame = requestAnimationFrame(coast);
     };
-    const scrollUp = () => surface.scrollBy({ top: -96, behavior: 'smooth' });
-    const scrollDown = () => surface.scrollBy({ top: 96, behavior: 'smooth' });
-
     surface.addEventListener('touchstart', touchStart, { passive: true });
     surface.addEventListener('touchmove', touchMove, { passive: false });
     surface.addEventListener('touchend', touchEnd, { passive: true });
     surface.addEventListener('touchcancel', touchEnd, { passive: true });
-    window.addEventListener('scrollUp', scrollUp);
-    window.addEventListener('scrollDown', scrollDown);
     return () => {
       stopMomentum();
       surface.removeEventListener('touchstart', touchStart);
       surface.removeEventListener('touchmove', touchMove);
       surface.removeEventListener('touchend', touchEnd);
       surface.removeEventListener('touchcancel', touchEnd);
-      window.removeEventListener('scrollUp', scrollUp);
-      window.removeEventListener('scrollDown', scrollDown);
     };
   }, [tab]);
   const current = state.tracks.find((track) => track.id === state.playback.trackId);
-  const progress = state.playback.duration ? Math.min(100, state.playback.position / state.playback.duration * 100) : 0;
+  const displayedPosition = seekPosition ?? state.playback.position;
+  const progress = state.playback.duration ? Math.min(100, displayedPosition / state.playback.duration * 100) : 0;
+  const updateSeek = (position: number) => {
+    seekPositionRef.current = position;
+    setSeekPosition(position);
+  };
+  const commitSeek = () => {
+    const position = seekPositionRef.current;
+    if (position === null) return;
+    seekPositionRef.current = null;
+    setSeekPosition(null);
+    session.command({ type: 'seek', position });
+  };
 
   return <div className="phone-shell">
     {state.error && <div className="mobile-error" role="alert"><AlertCircle size={18} /><span>{state.error}</span>{state.status === 'disconnected' && <button onClick={session.start}><RefreshCw size={16} />Reconnect</button>}</div>}
@@ -319,7 +349,10 @@ function PlayerPage() {
         <button className="back-library" onClick={() => setTab('library')}><ChevronLeft size={20} />Library</button>
         <div className={`album-art ${state.playback.phase === 'playing' ? 'playing' : ''}`}><div className="record-rings"><div className="record-label"><Radio size={36} /></div></div></div>
         <div className="phone-track-meta"><p>{state.playback.phase === 'loading' ? 'PREPARING STREAM' : state.playback.phase === 'playing' ? `NOW PLAYING (${state.bitrateKbps === null ? 'measuring…' : `${state.bitrateKbps}kbps`})` : 'PAUSED'}</p><h1>{current?.name.replace(/\.[^.]+$/, '') ?? 'Choose a track'}</h1><span>{current?.path.includes('/') ? current.path.slice(0, current.path.lastIndexOf('/')) : state.folder || 'Airside'}</span></div>
-        <div className="progress"><div className="progress-line"><span style={{ width: `${progress}%` }} /></div><div><time>{formatTime(state.playback.position)}</time><time>-{formatTime(Math.max(0, state.playback.duration - state.playback.position))}</time></div></div>
+        <div className="progress">
+          <input className="progress-slider" type="range" min={0} max={state.playback.duration || 0} step={0.1} value={displayedPosition} disabled={!current || !state.playback.duration} aria-label="Track position" aria-valuetext={`${formatTime(displayedPosition)} of ${formatTime(state.playback.duration)}`} style={{ '--progress': `${progress}%` } as CSSProperties} onChange={(event) => updateSeek(Number(event.target.value))} onPointerUp={commitSeek} onPointerCancel={commitSeek} onTouchEnd={commitSeek} onKeyUp={commitSeek} onBlur={commitSeek} />
+          <div><time>{formatTime(displayedPosition)}</time><time>-{formatTime(Math.max(0, state.playback.duration - displayedPosition))}</time></div>
+        </div>
         <div className="phone-controls">
           <button onClick={() => session.command({ type: 'previous' })} disabled={!state.tracks.length} aria-label="Previous track"><SkipBack size={27} fill="currentColor" /></button>
           <button className="phone-play" onClick={() => session.command({ type: state.playback.phase === 'playing' ? 'pause' : 'play' })} disabled={!state.tracks.length || state.status !== 'connected'} aria-label={state.playback.phase === 'playing' ? 'Pause' : 'Play'}>{state.playback.phase === 'loading' ? <LoaderCircle className="spin" /> : state.playback.phase === 'playing' ? <Pause size={31} fill="currentColor" /> : <Play size={31} fill="currentColor" />}</button>
@@ -330,6 +363,7 @@ function PlayerPage() {
     </main>
 
     {current && tab === 'library' && <button className="mini-player" onClick={() => setTab('player')}><span className="mini-art"><Music2 size={18} /></span><span><strong>{current.name.replace(/\.[^.]+$/, '')}</strong><small>{state.playback.phase}</small></span><span className="mini-play" onClick={(event) => { event.stopPropagation(); session.command({ type: state.playback.phase === 'playing' ? 'pause' : 'play' }); }}>{state.playback.phase === 'playing' ? <Pause size={19} fill="currentColor" /> : <Play size={19} fill="currentColor" />}</span></button>}
+    {volumeVisible && <div className="volume-toast" role="status"><Volume2 size={15} /><span>{Math.round(state.volume * 100)}%</span></div>}
   </div>;
 }
 

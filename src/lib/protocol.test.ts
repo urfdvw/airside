@@ -34,6 +34,8 @@ describe('pairing protocol', () => {
 
   it('accepts only known commands', () => {
     assert.equal(isCommand({ type: 'play', trackId: 'song.mp3' }), true);
+    assert.equal(isCommand({ type: 'seek', position: 42.5 }), true);
+    assert.equal(isCommand({ type: 'seek', position: -1 }), false);
     assert.equal(isCommand({ type: 'delete', trackId: 'song.mp3' }), false);
     assert.equal(isCommand({ type: 'play', trackId: 4 }), false);
   });

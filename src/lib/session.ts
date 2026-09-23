@@ -253,6 +253,7 @@ export class HostSession extends Store<HostState> {
     if (command.type === 'pause') { this.engine.pause(); return; }
     if (command.type === 'next') { this.move(1); return; }
     if (command.type === 'previous') { this.move(-1); return; }
+    if (command.type === 'seek') { this.engine.seek(command.position); return; }
     const id = command.trackId;
     if (id) {
       const track = this.localTracks.find((track) => track.id === id);
@@ -310,6 +311,7 @@ export interface PlayerState {
   streamReady: boolean;
   audioEnabled: boolean;
   bitrateKbps: number | null;
+  volume: number;
   error: string | null;
 }
 
@@ -325,9 +327,11 @@ export class PlayerSession extends Store<PlayerState> {
   private generation = 0;
   private bitrateSample: ByteSample | null = null;
   private measuringBitrate = false;
+  private volumeFrame = 0;
+  private volumeTarget = 1;
 
   constructor(private hostId: string, private token: string) {
-    super({ status: 'connecting', tracks: [], folder: '', loadingLibrary: false, playback: { ...emptyPlayback }, streamReady: false, audioEnabled: false, bitrateKbps: null, error: null });
+    super({ status: 'connecting', tracks: [], folder: '', loadingLibrary: false, playback: { ...emptyPlayback }, streamReady: false, audioEnabled: false, bitrateKbps: null, volume: 1, error: null });
     this.audio.setAttribute('playsinline', '');
     this.audio.autoplay = true;
   }
@@ -453,6 +457,24 @@ export class PlayerSession extends Store<PlayerState> {
     this.connection.send(command);
   };
 
+  adjustVolume = (change: number) => {
+    const target = Math.max(0, Math.min(1, Math.round((this.volumeTarget + change) * 20) / 20));
+    this.volumeTarget = target;
+    this.patch({ volume: target });
+    cancelAnimationFrame(this.volumeFrame);
+    const ramp = () => {
+      const difference = this.volumeTarget - this.audio.volume;
+      if (Math.abs(difference) < 0.005) {
+        this.audio.volume = this.volumeTarget;
+        this.volumeFrame = 0;
+        return;
+      }
+      this.audio.volume = Math.max(0, Math.min(1, this.audio.volume + difference * 0.28));
+      this.volumeFrame = requestAnimationFrame(ramp);
+    };
+    this.volumeFrame = requestAnimationFrame(ramp);
+  };
+
   private updateMediaSession() {
     if (!('mediaSession' in navigator)) return;
     const track = this.state.tracks.find((track) => track.id === this.state.playback.trackId);
@@ -491,6 +513,7 @@ export class PlayerSession extends Store<PlayerState> {
 
   destroy() {
     ++this.generation;
+    cancelAnimationFrame(this.volumeFrame);
     this.cleanup();
     if ('mediaSession' in navigator) {
       navigator.mediaSession.metadata = null;
