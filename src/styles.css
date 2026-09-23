@@ -3,10 +3,11 @@
 :root { font-family: Manrope, system-ui, sans-serif; color: #262b26; background: #f3f2ec; font-synthesis: none; --ink: #252a25; --muted: #767b72; --line: #dcdcd3; --paper: #fbfaf6; --acid: #d9efa1; --green: #4f6a3c; }
 * { box-sizing: border-box; }
 .visually-hidden { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 html, body, #root { width: 100%; height: 100%; overflow: hidden; }
 body { margin: 0; min-width: 240px; min-height: 100vh; background: #f3f2ec; }
 button, input { font: inherit; }
-button { color: inherit; }
+button { color: inherit; touch-action: manipulation; }
 button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid rgba(93, 125, 66, .35); outline-offset: 2px; }
 .desktop-shell { height: 100dvh; overflow: hidden; background: radial-gradient(circle at 81% 18%, rgba(217,239,161,.24), transparent 22rem), #f3f2ec; }
 .topbar { height: 76px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; padding: 0 max(32px, calc((100vw - 1240px) / 2)); background: rgba(243,242,236,.88); backdrop-filter: blur(12px); position: sticky; top: 0; z-index: 10; }
@@ -93,10 +94,11 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .phone-shell { width: 100%; height: 100dvh; min-height: 0; max-width: 560px; margin: 0 auto; background: #f7f6f1; position: relative; padding-bottom: env(safe-area-inset-bottom); box-shadow: 0 0 60px rgba(20,25,20,.08); display: flex; flex-direction: column; overflow: hidden; }
 .mobile-error { margin: 12px 15px 0; border-radius: 9px; padding: 11px; background: #fff2ef; color: #804c43; display: flex; align-items: center; gap: 8px; font-size: 11px; }.mobile-error span { flex: 1; }.mobile-error button { border: 0; color: #75453d; background: #fff; border-radius: 6px; padding: 7px 9px; display: flex; align-items: center; gap: 5px; font-size: 10px; font-weight: 700; cursor: pointer; }
 .enable-audio { position: sticky; top: 10px; z-index: 4; margin: 10px 15px 0; width: calc(100% - 30px); border: 0; border-radius: 9px; background: #d9efa1; padding: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer; }
-.mobile-main { flex: 1 1 auto; min-height: 0; overflow: hidden; }
-.mobile-library { height: 100%; min-height: 0; padding: 29px 16px 8px; display: flex; flex-direction: column; overflow: hidden; }
+.mobile-main { flex: 1 1 auto; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior-y: contain; touch-action: pan-y; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+.mobile-main::-webkit-scrollbar { display: none; }
+.mobile-library { min-height: 100%; padding: 29px 16px 8px; display: flex; flex-direction: column; }
 .mobile-title { display: flex; justify-content: space-between; align-items: flex-end; padding: 0 5px 20px; }.mobile-title p { margin: 0 0 7px; font-size: 9px; }.mobile-title h1 { font-size: 31px; letter-spacing: -.05em; margin: 0; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.mobile-title > span { font: 9px 'DM Mono', monospace; color: #82867f; margin-bottom: 5px; }
-.mobile-track-list { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-width: none; border-top: 1px solid var(--line); }.mobile-track-list .track-row { grid-template-columns: 29px minmax(0,1fr) 34px; padding: 14px 5px; border-radius: 0; }.mobile-track-list .track-format { display: none; }.mobile-track-list .row-play { opacity: .8; }.mobile-track-list .track-copy strong { font-size: 13px; }.mobile-track-list .track-copy small { font-size: 10px; }
+.mobile-track-list { flex: 0 0 auto; overflow: visible; scrollbar-width: none; border-top: 1px solid var(--line); touch-action: pan-y; }.mobile-library.has-mini-player .mobile-track-list { padding-bottom: calc(64px + env(safe-area-inset-bottom)); }.mobile-track-list .track-row { min-height: 48px; grid-template-columns: 29px minmax(0,1fr) 34px; padding: 12px 5px; border-radius: 0; touch-action: pan-y; -webkit-tap-highlight-color: transparent; }.mobile-track-list .track-format { display: none; }.mobile-track-list .row-play { opacity: .8; }.mobile-track-list .track-copy strong { font-size: 13px; }.mobile-track-list .track-copy small { font-size: 10px; }
 .mobile-empty { height: 50vh; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #8c9089; gap: 9px; text-align: center; }.mobile-empty strong { color: #535851; font-size: 14px; }.mobile-empty span { font-size: 11px; max-width: 240px; line-height: 1.5; }
 .mini-player { position: fixed; z-index: 7; bottom: calc(10px + env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); width: min(530px, calc(100% - 20px)); border: 1px solid #3d433d; background: rgba(38,43,38,.97); color: white; border-radius: 11px; display: grid; grid-template-columns: 39px minmax(0,1fr) 42px; gap: 10px; align-items: center; padding: 8px 10px; text-align: left; cursor: pointer; box-shadow: 0 8px 24px rgba(24,29,24,.22); }.mini-art { height: 37px; border-radius: 7px; background: #d9efa1; color: #34402e; display: grid; place-items: center; }.mini-player > span:nth-child(2) { min-width: 0; display: flex; flex-direction: column; }.mini-player strong { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.mini-player small { font-size: 8px; text-transform: uppercase; color: #9ea49a; }.mini-play { height: 35px; display: grid; place-items: center; }
 .player-view { width: 100%; height: 100%; min-height: 0; padding: max(20px, env(safe-area-inset-top)) 24px max(20px, env(safe-area-inset-bottom)); display: flex; flex-direction: column; overflow: hidden; }
@@ -170,6 +172,18 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
   .mobile-title { padding-bottom: 10px; }
   .mobile-title h1 { font-size: 24px; }
 }
+@media (max-width: 360px), (max-height: 500px) {
+  .login-shell { padding: 8px; }
+  .login-card { padding: 14px; border-radius: 14px; }
+  .login-card > .brand { margin-bottom: 18px; gap: 8px; font-size: 16px; }
+  .login-card > .brand .brand-mark { width: 30px; height: 30px; }
+  .login-intro h1 { margin-bottom: 5px; font-size: 24px; }
+  .login-intro p { font-size: 10px; }
+  .pin-form { margin-top: 14px; }
+  .pin-entry input, .pin-entry .primary { height: 44px; }
+  .pin-entry input { font-size: 18px; }
+  .camera-login { margin-top: 8px; }
+}
 @media (max-width: 280px), (max-height: 340px) {
   .login-shell { padding: 5px; }
   .login-card { padding: 10px; border-radius: 10px; }
@@ -178,7 +192,7 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
   .login-intro h1 { font-size: 20px; margin-bottom: 4px; }
   .login-intro p { font-size: 8px; }
   .pin-form { margin-top: 10px; }
-  .pin-entry input, .pin-entry .primary { height: 35px; }
+  .pin-entry input, .pin-entry .primary { height: 44px; }
   .pin-entry input { font-size: 16px; padding-left: 8px; }
   .pin-entry .primary { padding-inline: 9px; font-size: 9px; }
   .camera-login { margin-top: 5px; }
@@ -204,7 +218,7 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
   .mini-player { bottom: calc(4px + env(safe-area-inset-bottom)); width: calc(100% - 8px); grid-template-columns: minmax(0,1fr) 30px; padding: 5px 7px; }
   .mini-player .mini-art { display: none; }
   .player-view { padding: max(5px, env(safe-area-inset-top)) 8px max(5px, env(safe-area-inset-bottom)); }
-  .back-library { height: 20px; font-size: 8px; }
+  .back-library { min-width: 44px; height: 44px; font-size: 8px; }
   .back-library svg { width: 15px; }
   .phone-track-meta p { margin-bottom: 2px; font-size: 7px; }
   .phone-track-meta h1 { font-size: 17px; line-height: 1; margin-bottom: 3px; }
@@ -212,8 +226,8 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
   .progress { margin: 8px 0 2px; }
   .progress > div:last-child { margin-top: 4px; font-size: 7px; }
   .phone-controls { gap: 12px; margin: 0 0 4px; }
-  .phone-controls button { width: 32px; height: 32px; }
-  .phone-controls .phone-play { width: 44px; height: 44px; }
+  .phone-controls button { width: 44px; height: 44px; }
+  .phone-controls .phone-play { width: 48px; height: 48px; }
   .phone-controls svg { width: 19px; }
   .playback-error { margin: 0 0 3px; font-size: 7px; }
 }

@@ -243,7 +243,7 @@ function PlayerPage() {
     {state.streamReady && !state.audioEnabled && <button className="enable-audio" onClick={session.enableAudio}><Volume2 size={19} />Tap to enable audio</button>}
 
     <main className="mobile-main">
-      {tab === 'library' ? <section className="mobile-library">
+      {tab === 'library' ? <section className={`mobile-library ${current ? 'has-mini-player' : ''}`}>
         <div className="mobile-title"><div><h1>{state.folder || 'Music'}</h1></div><span>{state.tracks.length} tracks</span></div>
         {state.status === 'connecting' || state.loadingLibrary ? <div className="mobile-empty"><LoaderCircle className="spin" /><strong>Connecting to your desktop…</strong><span>Keep the Airside page open there.</span></div>
           : !state.tracks.length ? <div className="mobile-empty"><Library /><strong>No music yet</strong><span>Open a folder on your desktop to fill this library.</span></div>
