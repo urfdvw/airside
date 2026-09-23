@@ -1,27 +1,28 @@
 {
-  "name": "fake-media-server",
+  "name": "airside",
   "version": "1.0.0",
   "description": "A browser-only local music library and peer-to-peer mobile player.",
   "private": true,
   "scripts": {
     "dev": "vite --host 0.0.0.0",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && node scripts/generate-rabbit-qr.mjs",
     "preview": "vite preview --host 0.0.0.0",
     "test": "node --test --experimental-strip-types src/lib/protocol.test.ts"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/urfdvw/fake-media-server.git"
+    "url": "git+https://github.com/urfdvw/airside.git"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "module",
   "bugs": {
-    "url": "https://github.com/urfdvw/fake-media-server/issues"
+    "url": "https://github.com/urfdvw/airside/issues"
   },
-  "homepage": "https://github.com/urfdvw/fake-media-server#readme",
+  "homepage": "https://urfdvw.github.io/airside/",
   "dependencies": {
+    "jsqr": "^1.4.0",
     "lucide-react": "^1.47.0",
     "peerjs": "^1.5.5",
     "qrcode": "^1.5.4",

@@ -1,5 +1,9 @@
 export const PROTOCOL_VERSION = 1;
 export const AUDIO_BITRATE = 320_000;
+export const PUBLIC_APP_URL = 'https://urfdvw.github.io/airside/';
+export const PIN_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+export const PIN_LENGTH = 4;
+export const PEER_PREFIX = 'airside-';
 
 export interface Track {
   id: string;
@@ -67,8 +71,22 @@ export function isTrack(value: unknown): value is Track {
     && typeof value.size === 'number' && Number.isFinite(value.size) && value.size >= 0;
 }
 
-export function createToken(): string {
-  return Array.from(crypto.getRandomValues(new Uint8Array(24)), (b) => b.toString(16).padStart(2, '0')).join('');
+export function createPin(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(PIN_LENGTH));
+  return Array.from(bytes, (byte) => PIN_ALPHABET[byte % PIN_ALPHABET.length]).join('');
+}
+
+export function normalizePin(value: string): string {
+  return [...value.toUpperCase()].filter((letter) => PIN_ALPHABET.includes(letter)).join('').slice(0, PIN_LENGTH);
+}
+
+export function isPin(value: string): boolean {
+  return value.length === PIN_LENGTH && [...value].every((letter) => PIN_ALPHABET.includes(letter));
+}
+
+export function hostPeerId(pin: string): string {
+  if (!isPin(pin)) throw new Error('Enter a valid four-letter PIN.');
+  return `${PEER_PREFIX}${pin.toLowerCase()}`;
 }
 
 export function playerUrl(base: string, peer: string, token: string): string {
@@ -77,6 +95,32 @@ export function playerUrl(base: string, peer: string, token: string): string {
   url.search = '';
   url.hash = `/player?${new URLSearchParams({ peer, token })}`;
   return url.href;
+}
+
+export function pinPlayerUrl(base: string, pin: string): string {
+  return playerUrl(base, hostPeerId(pin), pin);
+}
+
+export function loginUrl(base: string): string {
+  const url = new URL(base);
+  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Use an http:// or https:// app URL.');
+  url.search = '';
+  url.hash = '/login';
+  return url.href;
+}
+
+export function pairingFromUrl(value: string): { peer: string; token: string } | null {
+  try {
+    const url = new URL(value);
+    if (!['http:', 'https:'].includes(url.protocol) || !url.hash.startsWith('#/player?')) return null;
+    const params = new URLSearchParams(url.hash.slice(url.hash.indexOf('?') + 1));
+    const peer = params.get('peer') ?? '';
+    const token = params.get('token') ?? '';
+    if (!isPin(token) || peer !== hostPeerId(token)) return null;
+    return { peer, token };
+  } catch {
+    return null;
+  }
 }
 
 // The receiver's answer must request stereo as well as the sender's offer.

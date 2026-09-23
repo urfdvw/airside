@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { afterEach, describe, it, mock } from 'node:test';
-import { AUDIO_BITRATE, createToken, formatTime, isCommand, isPlayback, measuredBitrateKbps, playerUrl, stereoOpusSdp } from './protocol.ts';
+import { AUDIO_BITRATE, createPin, formatTime, hostPeerId, isCommand, isPin, isPlayback, loginUrl, measuredBitrateKbps, normalizePin, pairingFromUrl, pinPlayerUrl, playerUrl, stereoOpusSdp } from './protocol.ts';
 
 afterEach(() => mock.restoreAll());
 
@@ -14,9 +14,22 @@ describe('pairing protocol', () => {
     assert.throws(() => playerUrl('javascript:alert(1)', 'peer', 'token'));
   });
 
-  it('creates a 192-bit random token', () => {
-    mock.method(crypto, 'getRandomValues', (bytes: Uint8Array) => bytes.fill(0xab));
-    assert.equal(createToken(), 'ab'.repeat(24));
+  it('creates and normalizes four-letter pairing PINs', () => {
+    mock.method(crypto, 'getRandomValues', (bytes: Uint8Array) => bytes.fill(0));
+    assert.equal(createPin(), 'AAAA');
+    assert.equal(normalizePin('a-b 1cD!'), 'ABCD');
+    assert.equal(isPin('ABCD'), true);
+    assert.equal(isPin('AIOZ'), false);
+    assert.equal(hostPeerId('ABCD'), 'airside-abcd');
+  });
+
+  it('builds PIN, login, and scannable pairing URLs', () => {
+    const url = pinPlayerUrl('https://urfdvw.github.io/airside/', 'ABCD');
+    assert.equal(url, 'https://urfdvw.github.io/airside/#/player?peer=airside-abcd&token=ABCD');
+    assert.deepEqual(pairingFromUrl(url), { peer: 'airside-abcd', token: 'ABCD' });
+    assert.equal(pairingFromUrl('https://example.com/#/player?peer=other&token=ABCD'), null);
+    assert.equal(pairingFromUrl('https://urfdvw.github.io/airside/#/login'), null);
+    assert.equal(loginUrl('https://urfdvw.github.io/airside/'), 'https://urfdvw.github.io/airside/#/login');
   });
 
   it('accepts only known commands', () => {

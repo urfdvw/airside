@@ -1,11 +1,27 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import QRCode from 'qrcode';
-import { AlertCircle, Check, ChevronLeft, Copy, FolderOpen, Library, Link2, LoaderCircle, Music2, Pause, Play, Radio, RefreshCw, SkipBack, SkipForward, Smartphone, Unplug, Volume2, Wifi } from 'lucide-react';
+import { AlertCircle, Camera, ChevronLeft, FolderOpen, Library, LoaderCircle, Music2, Pause, Play, Radio, RefreshCw, ScanLine, SkipBack, SkipForward, Smartphone, Unplug, Volume2, Wifi, X } from 'lucide-react';
 import { HostSession, PlayerSession } from './lib/session';
-import { AUDIO_BITRATE, formatTime, playerUrl, type Track } from './lib/protocol';
+import { AUDIO_BITRATE, PUBLIC_APP_URL, formatTime, hostPeerId, isPin, loginUrl, normalizePin, pairingFromUrl, playerUrl, type Track } from './lib/protocol';
 
 function App() {
-  return window.location.hash.startsWith('#/player') ? <PlayerPage /> : <HomePage />;
+  const [route, setRoute] = useState(window.location.hash);
+  useEffect(() => {
+    const update = () => setRoute(window.location.hash);
+    window.addEventListener('hashchange', update);
+    return () => window.removeEventListener('hashchange', update);
+  }, []);
+  if (route.startsWith('#/player')) return <PlayerPage />;
+  if (route.startsWith('#/login')) return <LoginPage />;
+  return <HomePage />;
+}
+
+function runtimeAppUrl() {
+  return import.meta.env.DEV ? `${window.location.origin}${window.location.pathname}` : PUBLIC_APP_URL;
+}
+
+function openPlayer(peer: string, token: string) {
+  window.location.hash = `/player?${new URLSearchParams({ peer, token })}`;
 }
 
 function Brand() {
@@ -19,16 +35,9 @@ function StatusDot({ active }: { active: boolean }) {
 function HomePage() {
   const session = useMemo(() => new HostSession(), []);
   const state = useSyncExternalStore(session.subscribe, session.getSnapshot);
-  const [baseUrl, setBaseUrl] = useState(() => `${window.location.origin}${window.location.pathname}`);
   const [qr, setQr] = useState('');
-  const [copied, setCopied] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  const link = useMemo(() => {
-    if (!state.peerId) return { url: '', error: null };
-    try { return { url: playerUrl(baseUrl, state.peerId, state.token), error: null }; }
-    catch { return { url: '', error: 'Enter a valid http:// or https:// app address.' }; }
-  }, [baseUrl, state.peerId, state.token]);
-  const url = link.url;
+  const url = useMemo(() => state.peerId ? playerUrl(runtimeAppUrl(), state.peerId, state.token) : '', [state.peerId, state.token]);
 
   useEffect(() => { session.start(); return () => session.destroy(); }, [session]);
   useEffect(() => {
@@ -37,17 +46,11 @@ function HomePage() {
     let live = true;
     QRCode.toDataURL(url, { width: 480, margin: 2, color: { dark: '#252a25', light: '#ffffff' }, errorCorrectionLevel: 'M' })
       .then((data) => { if (live) setQr(data); })
-      .catch(() => { if (live) setActionError('Could not generate the QR code. Copy the player URL instead.'); });
+      .catch(() => { if (live) setActionError('Could not generate the pairing QR code. Use the four-letter PIN instead.'); });
     return () => { live = false; };
   }, [url]);
 
   const current = state.tracks.find((track) => track.id === state.playback.trackId);
-  const copy = async () => {
-    if (!url) return;
-    try { await navigator.clipboard.writeText(url); setCopied(true); setTimeout(() => setCopied(false), 1600); }
-    catch { setActionError('Copy failed. Select the URL and copy it manually.'); }
-  };
-
   return <div className="desktop-shell">
     <header className="topbar">
       <Brand />
@@ -64,7 +67,7 @@ function HomePage() {
         <div className="privacy-note"><Wifi size={18} /><span>Direct browser-to-browser audio<br /><small>{AUDIO_BITRATE / 1000} kbps stereo Opus target</small></span></div>
       </section>
 
-      {(state.error || link.error || actionError) && <div className="notice error" role="alert"><AlertCircle size={18} /><span>{state.error || link.error || actionError}</span>{state.signaling === 'offline' && <button className="text-button" onClick={session.retry}>Retry</button>}</div>}
+      {(state.error || actionError) && <div className="notice error" role="alert"><AlertCircle size={18} /><span>{state.error || actionError}</span>{state.signaling === 'offline' && <button className="text-button" onClick={session.retry}>Retry</button>}</div>}
 
       <div className="workspace-grid">
         <section className="panel library-panel">
@@ -85,19 +88,20 @@ function HomePage() {
 
         <section className="panel pairing-panel">
           <div className="panel-heading"><div><span className="step">02</span><h2>Pair your phone</h2></div></div>
-          <p className="panel-copy">Scan with your phone’s camera, or open the test link in another browser tab.</p>
+          <p className="panel-copy">Scan this code with your camera, or enter the four-letter PIN on the login page.</p>
           <div className={`qr-frame ${state.connected ? 'paired' : ''}`}>
             {state.connected ? <div className="paired-state"><span className="phone-orbit"><Smartphone size={42} /></span><h3>Phone connected</h3><p>{state.streaming ? 'Audio channel is live' : 'Preparing audio channel…'}</p></div>
               : qr ? <img src={qr} alt="QR code for the mobile player URL" /> : <div className="qr-loading"><LoaderCircle className="spin" /><span>Creating secure link…</span></div>}
           </div>
-          <label className="field-label" htmlFor="base-url">App address reachable from your phone</label>
-          <input id="base-url" className="base-input" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} spellCheck={false} />
-          <div className="url-box"><Link2 size={17} /><input aria-label="Player URL" value={url} readOnly /><button onClick={copy} disabled={!url} aria-label="Copy player URL">{copied ? <Check size={18} /> : <Copy size={18} />}</button></div>
+          <div className="pair-pin" aria-label={`Pairing PIN ${state.pin}`}>
+            <span>PAIRING PIN</span>
+            <strong>{[...state.pin].map((letter, index) => <i key={`${letter}-${index}`}>{letter}</i>)}</strong>
+          </div>
           <div className="pair-actions">
-            <button className="primary" onClick={() => url && window.open(url, '_blank', 'noopener,noreferrer')} disabled={!url}><Smartphone size={18} />Open test player</button>
+            <button className="primary" onClick={() => window.open(loginUrl(runtimeAppUrl()), '_blank', 'noopener,noreferrer')}><Smartphone size={18} />Open login page</button>
             {state.connected && <button className="secondary" onClick={session.disconnect}><Unplug size={17} />Disconnect</button>}
           </div>
-          <p className="fine-print">The pairing token is part of the link and is also logged to the browser console. PeerJS’s public service handles signaling; connection limits and availability are outside this app.</p>
+          <p className="fine-print">The direct player URL is logged to the browser console for local testing. PeerJS’s public service handles signaling; connection limits and availability are outside this app.</p>
         </section>
       </div>
 
@@ -111,6 +115,104 @@ function HomePage() {
         </div>
         <div className="stream-stats"><StatusDot active={state.streaming} /><span>{state.streaming ? 'Live' : state.connected ? 'Connecting audio' : 'Phone offline'}</span><small>{state.quality ?? `${AUDIO_BITRATE / 1000} kbps stereo target`}</small></div>
       </section>}
+    </main>
+  </div>;
+}
+
+function LoginPage() {
+  const [pin, setPin] = useState('');
+  const [scanning, setScanning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const video = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    if (!scanning || !video.current) return;
+    let live = true;
+    let stream: MediaStream | null = null;
+    let frame = 0;
+    const videoElement = video.current;
+    void (async () => {
+      try {
+        const [scannerModule, cameraStream] = await Promise.all([
+          import('jsqr'),
+          navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false }),
+        ]);
+        const jsQR = scannerModule.default;
+        stream = cameraStream;
+        if (!live) { stream.getTracks().forEach((track) => track.stop()); return; }
+        videoElement.srcObject = stream;
+        await videoElement.play();
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d', { willReadFrequently: true });
+        let lastScan = 0;
+        const readFrame = (timestamp: number) => {
+          if (!live || !context) return;
+          if (timestamp - lastScan >= 160 && videoElement.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && videoElement.videoWidth && videoElement.videoHeight) {
+            lastScan = timestamp;
+            const scale = Math.min(1, 720 / videoElement.videoWidth);
+            canvas.width = Math.round(videoElement.videoWidth * scale);
+            canvas.height = Math.round(videoElement.videoHeight * scale);
+            context.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+            const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
+            const result = jsQR(pixels.data, pixels.width, pixels.height, { inversionAttempts: 'attemptBoth' });
+            if (result) {
+              const pairing = pairingFromUrl(result.data);
+              if (pairing) { openPlayer(pairing.peer, pairing.token); return; }
+              setError('That QR code is not an Airside pairing code. Scan the code shown on the desktop.');
+            }
+          }
+          frame = requestAnimationFrame(readFrame);
+        };
+        frame = requestAnimationFrame(readFrame);
+      } catch {
+        if (live) {
+          setScanning(false);
+          setError('Camera access failed. Allow camera access, or enter the four-letter PIN.');
+        }
+      }
+    })();
+    return () => {
+      live = false;
+      cancelAnimationFrame(frame);
+      stream?.getTracks().forEach((track) => track.stop());
+      videoElement.srcObject = null;
+    };
+  }, [scanning]);
+
+  const connect = () => {
+    if (!isPin(pin)) {
+      setError('Enter the four-letter PIN shown on the desktop. The letters I and O are not used.');
+      return;
+    }
+    openPlayer(hostPeerId(pin), pin);
+  };
+
+  return <div className="login-shell">
+    <main className={`login-card ${scanning ? 'scanning' : ''}`}>
+      <Brand />
+      <div className="login-intro">
+        <h1>Connect to Airside</h1>
+        <p>Enter the desktop PIN or scan its QR code.</p>
+      </div>
+
+      <form className="pin-form" onSubmit={(event) => { event.preventDefault(); connect(); }}>
+        <label className="visually-hidden" htmlFor="pair-pin">Four-letter PIN</label>
+        <div className="pin-entry">
+          <input id="pair-pin" value={pin} onChange={(event) => { setPin(normalizePin(event.target.value)); setError(null); }} maxLength={4} autoCapitalize="characters" autoComplete="one-time-code" inputMode="text" spellCheck={false} placeholder="ABCD" autoFocus />
+          <button className="primary" type="submit" disabled={!isPin(pin)}>Connect</button>
+        </div>
+      </form>
+
+      <div className={`camera-login ${scanning ? 'active' : ''}`}>
+        {scanning ? <>
+          <video ref={video} muted playsInline aria-label="QR code camera preview" />
+          <div className="scan-guide"><ScanLine /></div>
+          <button type="button" className="stop-scan" onClick={() => setScanning(false)} aria-label="Stop camera"><X size={18} /></button>
+          <span className="camera-hint">Point the camera at the pairing QR on your desktop</span>
+        </> : <button type="button" className="camera-start" onClick={() => { setError(null); setScanning(true); }}><Camera size={22} /><strong>Scan pairing QR</strong><span>Use this device’s camera</span></button>}
+      </div>
+
+      {error && <div className="login-error" role="alert"><AlertCircle size={17} /><span>{error}</span></div>}
     </main>
   </div>;
 }

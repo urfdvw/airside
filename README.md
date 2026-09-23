@@ -2,6 +2,16 @@
 
 Airside is a pure frontend app that streams music from a folder on a desktop browser to a mobile browser. The files never upload to an application server: the desktop reads and decodes them locally, and WebRTC sends an audio stream directly to the phone.
 
+Open the app at [urfdvw.github.io/airside](https://urfdvw.github.io/airside/).
+
+## Rabbit r1
+
+Scan this creation QR on a Rabbit r1 to open Airside’s login page:
+
+![Airside Rabbit r1 creation QR](docs/rabbit-r1-qr.png)
+
+The build generates this image from the Rabbit creation JSON format used by [`rabbit-hmi-oss/creations-sdk`](https://github.com/rabbit-hmi-oss/creations-sdk). The encoded URL is `https://urfdvw.github.io/airside/#/login`.
+
 ## Run locally
 
 ```sh
@@ -9,9 +19,9 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:5173` in desktop Chrome or Edge, choose a music folder, and use the generated player link in another tab. The full player URL, including its one-time session token, is also logged in the desktop browser console.
+Open `http://localhost:5173` in desktop Chrome or Edge, choose a music folder, and use the four-letter PIN or generated pairing QR in another browser. The full player URL is also logged in the desktop browser console for testing.
 
-For a physical phone, it must be able to open the app address encoded in the QR code. Replace the displayed app address with an HTTPS deployment URL or a reachable HTTPS development URL. The File System Access API works on `localhost` or HTTPS and currently requires a supporting desktop browser.
+The production pairing QR uses `https://urfdvw.github.io/airside/`. In development it uses the current local origin. The File System Access API works on `localhost` or HTTPS and currently requires a supporting desktop browser.
 
 ## How it works
 
@@ -20,7 +30,8 @@ For a physical phone, it must be able to open the app address encoded in the QR 
 - PeerJS's default public cloud service handles signaling. The app has no custom server, API, or database.
 - A PeerJS data connection carries the file list, play/pause/next/previous commands, progress, and status.
 - A one-way PeerJS media connection carries an Opus stereo stream with a 320,000 bps sender cap and SDP stereo preference.
-- A random 192-bit token in the QR/player URL authorizes one player connection for the current desktop page session.
+- A random four-letter PIN determines the temporary PeerJS host ID and authorizes one player connection for the current desktop page session.
+- The login page accepts that PIN or scans the same direct-player QR shown on the desktop.
 
 The public PeerJS service requires internet access and has availability and usage limits. WebRTC may fail on restrictive or symmetric-NAT networks because this app does not provide a custom TURN relay. The 320 kbps value is a target/cap; the browser and network can adapt below it.
 
@@ -31,4 +42,4 @@ npm test
 npm run build
 ```
 
-The production build is written to `docs/`, ready for GitHub Pages deployment from the repository's `/docs` directory.
+The production build is written to `docs/`, ready for GitHub Pages deployment from the repository's `/docs` directory. The build also writes `docs/rabbit-r1-qr.png` and its source payload to `docs/rabbit-r1-creation.json`.

@@ -1,7 +1,7 @@
 import Peer, { type DataConnection, type MediaConnection } from 'peerjs';
 import { AudioEngine } from './audio';
 import { publicTrack, scanFolder, type LocalTrack } from './library';
-import { AUDIO_BITRATE, PROTOCOL_VERSION, createToken, emptyPlayback, errorMessage, isCommand, isPlayback, isRecord, isTrack, measuredBitrateKbps, stereoOpusSdp, type ByteSample, type Command, type HostMessage, type Playback, type Track } from './protocol';
+import { AUDIO_BITRATE, PROTOCOL_VERSION, createPin, emptyPlayback, errorMessage, hostPeerId, isCommand, isPlayback, isRecord, isTrack, measuredBitrateKbps, stereoOpusSdp, type ByteSample, type Command, type HostMessage, type Playback, type Track } from './protocol';
 
 class Store<T> {
   private listeners = new Set<() => void>();
@@ -25,6 +25,7 @@ function peerError(error: unknown): string {
 
 export interface HostState {
   peerId: string;
+  pin: string;
   token: string;
   signaling: 'connecting' | 'online' | 'offline';
   connected: boolean;
@@ -54,7 +55,8 @@ export class HostSession extends Store<HostState> {
   private disposed = false;
 
   constructor() {
-    super({ peerId: '', token: createToken(), signaling: 'connecting', connected: false, streaming: false, audioReady: false, scanning: false, scanCount: 0, skipped: 0, folder: '', tracks: [], playback: { ...emptyPlayback }, error: null, quality: null });
+    const pin = createPin();
+    super({ peerId: '', pin, token: pin, signaling: 'connecting', connected: false, streaming: false, audioReady: false, scanning: false, scanCount: 0, skipped: 0, folder: '', tracks: [], playback: { ...emptyPlayback }, error: null, quality: null });
     this.engine = new AudioEngine((playback) => {
       this.patch({ playback, audioReady: this.engine.ready });
       this.send({ type: 'state', playback });
@@ -79,20 +81,32 @@ export class HostSession extends Store<HostState> {
   private openPeer() {
     this.patch({ signaling: 'connecting', error: null });
     // No custom host, API key, signaling server, or application backend.
-    const peer = new Peer();
+    const peer = new Peer(hostPeerId(this.state.pin));
     this.peer = peer;
     clearTimeout(this.signalTimer);
     this.signalTimer = setTimeout(() => {
       if (this.state.signaling === 'connecting') this.patch({ signaling: 'offline', error: 'PeerJS is taking too long to connect. Check your internet connection and retry.' });
     }, 15000);
     peer.on('open', (peerId) => {
+      if (this.peer !== peer) return;
       clearTimeout(this.signalTimer);
       this.patch({ peerId, signaling: 'online', error: null });
     });
-    peer.on('connection', (connection) => this.accept(connection));
+    peer.on('connection', (connection) => { if (this.peer === peer) this.accept(connection); else connection.close(); });
     peer.on('call', (call) => call.close());
-    peer.on('disconnected', () => this.patch({ signaling: 'offline' }));
-    peer.on('error', (error) => this.patch({ error: peerError(error), signaling: peer.disconnected || peer.destroyed ? 'offline' : this.state.signaling }));
+    peer.on('disconnected', () => { if (this.peer === peer) this.patch({ signaling: 'offline' }); });
+    peer.on('error', (error) => {
+      if (this.peer !== peer) return;
+      const type = isRecord(error) ? error.type : '';
+      if (type === 'unavailable-id' && !this.state.connected) {
+        peer.destroy();
+        const pin = createPin();
+        this.patch({ peerId: '', pin, token: pin });
+        this.openPeer();
+        return;
+      }
+      this.patch({ error: peerError(error), signaling: peer.disconnected || peer.destroyed ? 'offline' : this.state.signaling });
+    });
   }
 
   retry = () => {
