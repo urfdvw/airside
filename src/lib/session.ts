@@ -1,4 +1,4 @@
-import Peer, { type DataConnection, type MediaConnection } from 'peerjs';
+import Peer, { type DataConnection } from 'peerjs';
 import { AudioEngine } from './audio';
 import { publicTrack, scanFolder, type LocalTrack } from './library';
 import { AUDIO_BITRATE, PROTOCOL_VERSION, createPin, emptyPlayback, errorMessage, hostPeerId, isCommand, isPlayback, isRecord, isTrack, measuredBitrateKbps, stereoOpusSdp, type ByteSample, type Command, type HostMessage, type Playback, type Track } from './protocol';
@@ -23,6 +23,11 @@ function peerError(error: unknown): string {
   return errorMessage(error);
 }
 
+function isSignalingFailure(error: unknown): boolean {
+  const type = isRecord(error) ? String(error.type) : '';
+  return ['disconnected', 'network', 'server-error', 'socket-error', 'socket-closed'].includes(type);
+}
+
 export interface HostState {
   peerId: string;
   pin: string;
@@ -44,11 +49,14 @@ export interface HostState {
 export class HostSession extends Store<HostState> {
   private peer: Peer | null = null;
   private connection: DataConnection | null = null;
-  private call: MediaConnection | null = null;
+  private mediaSender: RTCRtpSender | null = null;
+  private mediaNegotiating = false;
+  private mediaRetryTimer?: ReturnType<typeof setTimeout>;
   private localTracks: LocalTrack[] = [];
   private scan: AbortController | null = null;
   private timer?: ReturnType<typeof setInterval>;
   private signalTimer?: ReturnType<typeof setTimeout>;
+  private peerReconnectTimer?: ReturnType<typeof setTimeout>;
   private lastPong = 0;
   private lastPing = 0;
   private engine: AudioEngine;
@@ -90,11 +98,17 @@ export class HostSession extends Store<HostState> {
     peer.on('open', (peerId) => {
       if (this.peer !== peer) return;
       clearTimeout(this.signalTimer);
+      clearTimeout(this.peerReconnectTimer);
       this.patch({ peerId, signaling: 'online', error: null });
+      if (this.connection?.open) this.ensureMedia();
     });
     peer.on('connection', (connection) => { if (this.peer === peer) this.accept(connection); else connection.close(); });
     peer.on('call', (call) => call.close());
-    peer.on('disconnected', () => { if (this.peer === peer) this.patch({ signaling: 'offline' }); });
+    peer.on('disconnected', () => {
+      if (this.peer !== peer) return;
+      this.patch({ signaling: 'offline' });
+      this.scheduleSignalingReconnect(peer);
+    });
     peer.on('error', (error) => {
       if (this.peer !== peer) return;
       const type = isRecord(error) ? error.type : '';
@@ -105,8 +119,23 @@ export class HostSession extends Store<HostState> {
         this.openPeer();
         return;
       }
+      if (isSignalingFailure(error) && this.connection?.open) {
+        this.patch({ error: null, signaling: 'offline' });
+        this.scheduleSignalingReconnect(peer);
+        return;
+      }
       this.patch({ error: peerError(error), signaling: peer.disconnected || peer.destroyed ? 'offline' : this.state.signaling });
     });
+  }
+
+  private scheduleSignalingReconnect(peer: Peer) {
+    clearTimeout(this.peerReconnectTimer);
+    this.peerReconnectTimer = setTimeout(() => {
+      if (this.disposed || this.peer !== peer || peer.destroyed || !peer.disconnected) return;
+      this.patch({ signaling: 'connecting', error: null });
+      try { peer.reconnect(); }
+      catch { this.patch({ signaling: 'offline' }); }
+    }, 750);
   }
 
   retry = () => {
@@ -150,6 +179,7 @@ export class HostSession extends Store<HostState> {
       if (this.connection !== connection) return;
       if (isRecord(data) && data.type === 'pong') this.lastPong = Date.now();
       else if (isRecord(data) && data.type === 'ready') this.ensureMedia();
+      else if (isRecord(data) && data.type === 'media-answer' && typeof data.sdp === 'string') void this.acceptMediaAnswer(data.sdp);
       else if (isCommand(data)) this.command(data);
     });
     connection.on('close', () => { if (this.connection === connection) this.disconnect(); });
@@ -166,35 +196,63 @@ export class HostSession extends Store<HostState> {
     this.send({ type: 'library-end' });
   }
 
-  private ensureMedia() {
-    if (!this.peer || !this.connection?.open || !this.engine.stream || this.call) return;
-    const call = this.peer.call(this.connection.peer, this.engine.stream, {
-      metadata: { token: this.state.token, version: PROTOCOL_VERSION }, sdpTransform: stereoOpusSdp,
-    });
-    this.call = call;
-    const pc = call.peerConnection;
-    let configured = false;
-    pc.addEventListener('connectionstatechange', () => {
-      if (this.call !== call) return;
-      if (pc.connectionState === 'connected') {
-        this.patch({ streaming: true });
-        if (!configured) { configured = true; void this.configureAudio(pc); }
-      } else if (['failed', 'closed'].includes(pc.connectionState)) {
-        this.closeMedia();
-        this.engine.pause();
-        this.send({ type: 'error', message: 'Audio connection lost. Tap Reconnect to try again.' });
-      } else if (pc.connectionState === 'disconnected') {
-        this.patch({ streaming: false });
+  private async ensureMedia() {
+    const connection = this.connection;
+    const stream = this.engine.stream;
+    if (!connection?.open || !stream || this.mediaNegotiating || this.state.streaming) return;
+    const pc = connection.peerConnection;
+    if (pc.signalingState !== 'stable') return;
+    this.mediaNegotiating = true;
+    clearTimeout(this.mediaRetryTimer);
+    try {
+      if (!this.mediaSender) {
+        const track = stream.getAudioTracks()[0];
+        if (!track) throw new Error('No audio track is available.');
+        this.mediaSender = pc.addTrack(track, stream);
       }
-    });
-    call.on('error', (error) => {
-      if (this.call !== call) return;
-      this.closeMedia();
-      this.engine.pause();
-      this.patch({ error: peerError(error) });
-      this.send({ type: 'error', message: 'Audio connection failed. Tap Reconnect to try again.' });
-    });
-    call.on('close', () => { if (this.call === call) { this.closeMedia(); this.engine.pause(); } });
+      const offer = await pc.createOffer();
+      const sdp = stereoOpusSdp(offer.sdp ?? '');
+      await pc.setLocalDescription({ type: 'offer', sdp });
+      if (this.connection !== connection) return;
+      this.send({ type: 'media-offer', sdp: pc.localDescription?.sdp ?? sdp });
+      this.scheduleMediaNegotiationRetry(connection, pc, 5000);
+    } catch (error) {
+      this.patch({ error: errorMessage(error), streaming: false });
+      this.send({ type: 'error', message: 'Audio negotiation failed. Retrying…' });
+      this.scheduleMediaNegotiationRetry(connection, pc);
+    }
+  }
+
+  private async acceptMediaAnswer(sdp: string) {
+    const connection = this.connection;
+    if (!connection?.open || !this.mediaNegotiating) return;
+    const pc = connection.peerConnection;
+    try {
+      await pc.setRemoteDescription({ type: 'answer', sdp });
+      if (this.connection !== connection) return;
+      clearTimeout(this.mediaRetryTimer);
+      this.mediaNegotiating = false;
+      this.patch({ streaming: true, error: null });
+      await this.configureAudio(pc);
+    } catch (error) {
+      this.patch({ streaming: false, error: errorMessage(error) });
+      this.send({ type: 'error', message: 'Audio negotiation failed. Retrying…' });
+      this.scheduleMediaNegotiationRetry(connection, pc);
+    }
+  }
+
+  private scheduleMediaNegotiationRetry(connection: DataConnection, pc: RTCPeerConnection, delay = 1500) {
+    clearTimeout(this.mediaRetryTimer);
+    this.mediaRetryTimer = setTimeout(() => {
+      void (async () => {
+        if (this.connection !== connection || !connection.open || this.state.streaming) return;
+        if (pc.signalingState === 'have-local-offer') {
+          try { await pc.setLocalDescription({ type: 'rollback' }); } catch { /* The next ready message can retry. */ }
+        }
+        this.mediaNegotiating = false;
+        await this.ensureMedia();
+      })();
+    }, delay);
   }
 
   private async configureAudio(pc: RTCPeerConnection) {
@@ -207,9 +265,9 @@ export class HostSession extends Store<HostState> {
       await sender.setParameters(params);
       const answer = pc.remoteDescription?.sdp ?? '';
       const stereo = /(?:^|[; ])stereo=1(?:;|\r?$)/m.test(answer);
-      if (this.call?.peerConnection === pc) this.patch({ quality: stereo ? 'Opus · stereo negotiated' : 'Stereo was not confirmed by this browser.' });
+      if (this.connection?.peerConnection === pc) this.patch({ quality: stereo ? 'Opus · stereo negotiated' : 'Stereo was not confirmed by this browser.' });
     } catch {
-      if (this.call?.peerConnection === pc) this.patch({ quality: 'This browser could not enforce the 320 kbps cap.' });
+      if (this.connection?.peerConnection === pc) this.patch({ quality: 'This browser could not enforce the 320 kbps cap.' });
     }
   }
 
@@ -276,9 +334,9 @@ export class HostSession extends Store<HostState> {
   }
 
   private closeMedia() {
-    const call = this.call;
-    this.call = null;
-    call?.close();
+    clearTimeout(this.mediaRetryTimer);
+    this.mediaSender = null;
+    this.mediaNegotiating = false;
     this.patch({ streaming: false, quality: null });
   }
 
@@ -295,6 +353,7 @@ export class HostSession extends Store<HostState> {
     this.disposed = true;
     clearInterval(this.timer);
     clearTimeout(this.signalTimer);
+    clearTimeout(this.peerReconnectTimer);
     this.scan?.abort();
     this.disconnect();
     this.peer?.destroy();
@@ -318,7 +377,6 @@ export interface PlayerState {
 export class PlayerSession extends Store<PlayerState> {
   private peer: Peer | null = null;
   private connection: DataConnection | null = null;
-  private call: MediaConnection | null = null;
   private audio = new Audio();
   private timer?: ReturnType<typeof setInterval>;
   private playbackTimer?: ReturnType<typeof setInterval>;
@@ -331,6 +389,8 @@ export class PlayerSession extends Store<PlayerState> {
   private measuringBitrate = false;
   private volumeFrame = 0;
   private volumeTarget = 1;
+  private signalingReconnectTimer?: ReturnType<typeof setTimeout>;
+  private mediaRetryTimer?: ReturnType<typeof setTimeout>;
 
   constructor(private hostId: string, private token: string) {
     super({ status: 'connecting', tracks: [], folder: '', loadingLibrary: false, playback: { ...emptyPlayback }, streamReady: false, audioEnabled: false, bitrateKbps: null, volume: 1, error: null });
@@ -354,34 +414,41 @@ export class PlayerSession extends Store<PlayerState> {
     this.peer = peer;
     peer.on('open', () => {
       if (generation !== this.generation) return;
+      clearTimeout(this.signalingReconnectTimer);
+      if (this.connection) {
+        if (this.connection.open) this.connection.send({ type: 'ready' });
+        return;
+      }
       const connection = peer.connect(this.hostId, { reliable: true, metadata: { token: this.token, version: PROTOCOL_VERSION } });
       this.connection = connection;
+      connection.peerConnection.addEventListener('track', (event) => {
+        if (generation !== this.generation || this.connection !== connection || event.track.kind !== 'audio') return;
+        const stream = event.streams[0] ?? new MediaStream([event.track]);
+        this.audio.srcObject = stream;
+        this.bitrateSample = null;
+        this.receivedError = false;
+        clearTimeout(this.mediaRetryTimer);
+        this.patch({ streamReady: true, bitrateKbps: null, error: null });
+        void this.enableAudio();
+      });
       connection.on('data', (data: unknown) => { if (generation === this.generation) this.receive(data); });
       connection.on('close', () => { if (generation === this.generation) this.lost(); });
       connection.on('error', (error) => { if (generation === this.generation) this.lost(peerError(error)); });
     });
-    peer.on('call', (call) => {
-      const meta: unknown = call.metadata;
-      if (generation !== this.generation || call.peer !== this.hostId || !isRecord(meta) || meta.token !== this.token || meta.version !== PROTOCOL_VERSION) { call.close(); return; }
-      this.call?.close();
-      this.call = call;
-      call.on('stream', (stream) => {
-        if (this.call !== call) return;
-        this.audio.srcObject = stream;
-        this.bitrateSample = null;
-        this.patch({ streamReady: true, bitrateKbps: null });
-        void this.enableAudio();
-      });
-      call.on('close', () => {
-        if (this.call === call) { this.call = null; this.patch({ streamReady: false, audioEnabled: false }); }
-      });
-      call.on('error', () => { if (this.call === call) this.patch({ error: 'Audio could not connect. Tap Reconnect to try again.', streamReady: false }); });
-      call.answer(undefined, { sdpTransform: stereoOpusSdp });
+    peer.on('call', (call) => call.close());
+    peer.on('error', (error) => {
+      if (generation !== this.generation) return;
+      if (isSignalingFailure(error) && this.state.status === 'connected' && this.connection?.open) {
+        this.scheduleSignalingReconnect(peer, generation);
+        return;
+      }
+      this.lost(peerError(error));
     });
-    peer.on('error', (error) => { if (generation === this.generation) this.lost(peerError(error)); });
     peer.on('disconnected', () => {
       // Existing WebRTC connections survive signaling interruptions.
-      if (generation === this.generation && this.state.status !== 'connected') this.lost();
+      if (generation !== this.generation) return;
+      if (this.state.status === 'connected' && this.connection?.open) this.scheduleSignalingReconnect(peer, generation);
+      else this.lost();
     });
     this.timer = setInterval(() => {
       void this.measureBitrate();
@@ -391,6 +458,23 @@ export class PlayerSession extends Store<PlayerState> {
     }, 1000);
     this.playbackTimer = setInterval(() => this.advancePlaybackClock(), 250);
   };
+
+  private scheduleSignalingReconnect(peer: Peer, generation: number) {
+    clearTimeout(this.signalingReconnectTimer);
+    this.signalingReconnectTimer = setTimeout(() => {
+      if (generation !== this.generation || this.peer !== peer || peer.destroyed || !peer.disconnected) return;
+      try { peer.reconnect(); } catch { /* Keep the active WebRTC connection alive. */ }
+    }, 750);
+  }
+
+  private scheduleMediaRetry(generation: number) {
+    clearTimeout(this.mediaRetryTimer);
+    this.mediaRetryTimer = setTimeout(() => {
+      if (generation === this.generation && this.state.status === 'connected' && this.connection?.open && !this.state.streamReady) {
+        this.connection.send({ type: 'ready' });
+      }
+    }, 1500);
+  }
 
   private advancePlaybackClock() {
     const now = performance.now();
@@ -415,6 +499,8 @@ export class PlayerSession extends Store<PlayerState> {
       this.pendingTracks.push(...data.tracks);
     } else if (data.type === 'library-end') {
       this.patch({ tracks: this.pendingTracks, loadingLibrary: false });
+    } else if (data.type === 'media-offer' && typeof data.sdp === 'string') {
+      void this.acceptMediaOffer(data.sdp);
     } else if (data.type === 'state' && isPlayback(data.playback)) {
       this.playbackTick = performance.now();
       const started = data.playback.phase === 'playing' && this.state.playback.phase !== 'playing';
@@ -424,8 +510,26 @@ export class PlayerSession extends Store<PlayerState> {
     } else if (data.type === 'error' && typeof data.message === 'string') {
       this.receivedError = true;
       this.patch({ error: data.message });
+      if (data.message.startsWith('Audio negotiation')) this.scheduleMediaRetry(this.generation);
     } else if (data.type === 'ping') {
       this.connection?.send({ type: 'pong' });
+    }
+  }
+
+  private async acceptMediaOffer(sdp: string) {
+    const connection = this.connection;
+    if (!connection?.open) return;
+    const pc = connection.peerConnection;
+    try {
+      await pc.setRemoteDescription({ type: 'offer', sdp });
+      const answer = await pc.createAnswer();
+      const answerSdp = stereoOpusSdp(answer.sdp ?? '');
+      await pc.setLocalDescription({ type: 'answer', sdp: answerSdp });
+      if (this.connection !== connection) return;
+      connection.send({ type: 'media-answer', sdp: pc.localDescription?.sdp ?? answerSdp });
+    } catch (error) {
+      this.patch({ error: `Audio negotiation failed: ${errorMessage(error)}`, streamReady: false });
+      this.scheduleMediaRetry(this.generation);
     }
   }
 
@@ -438,12 +542,12 @@ export class PlayerSession extends Store<PlayerState> {
   };
 
   private async measureBitrate() {
-    const call = this.call;
-    if (!call || this.measuringBitrate || this.state.playback.phase !== 'playing') return;
+    const connection = this.connection;
+    if (!connection?.open || !this.state.streamReady || this.measuringBitrate || this.state.playback.phase !== 'playing') return;
     this.measuringBitrate = true;
     try {
-      const stats = await call.peerConnection.getStats();
-      if (this.call !== call) return;
+      const stats = await connection.peerConnection.getStats();
+      if (this.connection !== connection) return;
       let bytes = 0;
       let timestamp = 0;
       let found = false;
@@ -511,16 +615,14 @@ export class PlayerSession extends Store<PlayerState> {
   private cleanup() {
     clearInterval(this.timer);
     clearInterval(this.playbackTimer);
+    clearTimeout(this.signalingReconnectTimer);
+    clearTimeout(this.mediaRetryTimer);
     const connection = this.connection;
-    const call = this.call;
     this.connection = null;
-    this.call = null;
     // Remove listeners before closing so deliberate cleanup cannot trigger lost().
     connection?.removeAllListeners();
-    call?.removeAllListeners();
     this.peer?.removeAllListeners();
     connection?.close();
-    call?.close();
     this.peer?.destroy();
     this.peer = null;
     this.audio.pause();

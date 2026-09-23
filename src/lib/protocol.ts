@@ -1,4 +1,4 @@
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 export const AUDIO_BITRATE = 320_000;
 export const PUBLIC_APP_URL = 'https://urfdvw.github.io/airside/';
 export const PIN_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
@@ -43,6 +43,7 @@ export type HostMessage =
   | { type: 'library-start'; folder: string }
   | { type: 'library-chunk'; tracks: Track[] }
   | { type: 'library-end' }
+  | { type: 'media-offer'; sdp: string }
   | { type: 'state'; playback: Playback }
   | { type: 'error'; message: string }
   | { type: 'ping' };
