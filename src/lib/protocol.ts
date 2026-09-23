@@ -1,5 +1,5 @@
 export const PROTOCOL_VERSION = 1;
-export const AUDIO_BITRATE = 128_000;
+export const AUDIO_BITRATE = 320_000;
 
 export interface Track {
   id: string;
@@ -18,6 +18,15 @@ export interface Playback {
   error: string | null;
 }
 export const emptyPlayback: Playback = { trackId: null, phase: 'idle', position: 0, duration: 0, error: null };
+
+export interface ByteSample { bytes: number; timestamp: number }
+
+export function measuredBitrateKbps(previous: ByteSample, current: ByteSample): number | null {
+  const elapsedMs = current.timestamp - previous.timestamp;
+  const receivedBytes = current.bytes - previous.bytes;
+  if (elapsedMs <= 0 || receivedBytes < 0) return null;
+  return Math.round((receivedBytes * 8) / elapsedMs);
+}
 
 export type Command =
   | { type: 'play'; trackId?: string }

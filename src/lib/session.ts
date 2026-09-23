@@ -1,7 +1,7 @@
 import Peer, { type DataConnection, type MediaConnection } from 'peerjs';
 import { AudioEngine } from './audio';
 import { publicTrack, scanFolder, type LocalTrack } from './library';
-import { AUDIO_BITRATE, PROTOCOL_VERSION, createToken, emptyPlayback, errorMessage, isCommand, isPlayback, isRecord, isTrack, stereoOpusSdp, type Command, type HostMessage, type Playback, type Track } from './protocol';
+import { AUDIO_BITRATE, PROTOCOL_VERSION, createToken, emptyPlayback, errorMessage, isCommand, isPlayback, isRecord, isTrack, measuredBitrateKbps, stereoOpusSdp, type ByteSample, type Command, type HostMessage, type Playback, type Track } from './protocol';
 
 class Store<T> {
   private listeners = new Set<() => void>();
@@ -195,7 +195,7 @@ export class HostSession extends Store<HostState> {
       const stereo = /(?:^|[; ])stereo=1(?:;|\r?$)/m.test(answer);
       if (this.call?.peerConnection === pc) this.patch({ quality: stereo ? 'Opus · stereo negotiated' : 'Stereo was not confirmed by this browser.' });
     } catch {
-      if (this.call?.peerConnection === pc) this.patch({ quality: 'This browser could not enforce the 128 kbps cap.' });
+      if (this.call?.peerConnection === pc) this.patch({ quality: 'This browser could not enforce the 320 kbps cap.' });
     }
   }
 
@@ -295,6 +295,7 @@ export interface PlayerState {
   playback: Playback;
   streamReady: boolean;
   audioEnabled: boolean;
+  bitrateKbps: number | null;
   error: string | null;
 }
 
@@ -308,9 +309,11 @@ export class PlayerSession extends Store<PlayerState> {
   private pendingTracks: Track[] = [];
   private receivedError = false;
   private generation = 0;
+  private bitrateSample: ByteSample | null = null;
+  private measuringBitrate = false;
 
   constructor(private hostId: string, private token: string) {
-    super({ status: 'connecting', tracks: [], folder: '', loadingLibrary: false, playback: { ...emptyPlayback }, streamReady: false, audioEnabled: false, error: null });
+    super({ status: 'connecting', tracks: [], folder: '', loadingLibrary: false, playback: { ...emptyPlayback }, streamReady: false, audioEnabled: false, bitrateKbps: null, error: null });
     this.audio.setAttribute('playsinline', '');
     this.audio.autoplay = true;
   }
@@ -323,7 +326,8 @@ export class PlayerSession extends Store<PlayerState> {
       this.patch({ status: 'disconnected', error: 'Open the player link or scan the QR code on your desktop to connect.' });
       return;
     }
-    this.patch({ status: 'connecting', error: null, audioEnabled: false, streamReady: false });
+    this.bitrateSample = null;
+    this.patch({ status: 'connecting', error: null, audioEnabled: false, streamReady: false, bitrateKbps: null });
     this.lastMessage = Date.now();
     const peer = new Peer();
     this.peer = peer;
@@ -343,7 +347,8 @@ export class PlayerSession extends Store<PlayerState> {
       call.on('stream', (stream) => {
         if (this.call !== call) return;
         this.audio.srcObject = stream;
-        this.patch({ streamReady: true });
+        this.bitrateSample = null;
+        this.patch({ streamReady: true, bitrateKbps: null });
         void this.enableAudio();
       });
       call.on('close', () => {
@@ -358,10 +363,11 @@ export class PlayerSession extends Store<PlayerState> {
       if (generation === this.generation && this.state.status !== 'connected') this.lost();
     });
     this.timer = setInterval(() => {
+      void this.measureBitrate();
       if (Date.now() - this.lastMessage > 20000) this.lost(this.state.status === 'connecting'
         ? 'Connection timed out. Check that the desktop is online. Some networks block direct connections.'
         : 'Desktop connection lost. Keep its tab open and tap Reconnect.');
-    }, 2000);
+    }, 1000);
   };
 
   private receive(data: unknown) {
@@ -378,7 +384,9 @@ export class PlayerSession extends Store<PlayerState> {
     } else if (data.type === 'library-end') {
       this.patch({ tracks: this.pendingTracks, loadingLibrary: false });
     } else if (data.type === 'state' && isPlayback(data.playback)) {
-      this.patch({ playback: data.playback });
+      const started = data.playback.phase === 'playing' && this.state.playback.phase !== 'playing';
+      if (started) this.bitrateSample = null;
+      this.patch({ playback: data.playback, ...(started || data.playback.phase !== 'playing' ? { bitrateKbps: null } : {}) });
       this.updateMediaSession();
     } else if (data.type === 'error' && typeof data.message === 'string') {
       this.receivedError = true;
@@ -395,6 +403,35 @@ export class PlayerSession extends Store<PlayerState> {
       this.patch({ audioEnabled: true });
     } catch { this.patch({ audioEnabled: false }); }
   };
+
+  private async measureBitrate() {
+    const call = this.call;
+    if (!call || this.measuringBitrate || this.state.playback.phase !== 'playing') return;
+    this.measuringBitrate = true;
+    try {
+      const stats = await call.peerConnection.getStats();
+      if (this.call !== call) return;
+      let bytes = 0;
+      let timestamp = 0;
+      let found = false;
+      stats.forEach((report) => {
+        const inbound = report as RTCInboundRtpStreamStats & { kind?: string; mediaType?: string };
+        if (inbound.type !== 'inbound-rtp' || (inbound.kind !== 'audio' && inbound.mediaType !== 'audio') || typeof inbound.bytesReceived !== 'number') return;
+        bytes += inbound.bytesReceived;
+        timestamp = Math.max(timestamp, inbound.timestamp);
+        found = true;
+      });
+      if (!found) return;
+      const sample = { bytes, timestamp };
+      const bitrateKbps = this.bitrateSample ? measuredBitrateKbps(this.bitrateSample, sample) : null;
+      this.bitrateSample = sample;
+      if (bitrateKbps !== null && this.state.playback.phase === 'playing') this.patch({ bitrateKbps });
+    } catch {
+      // Stats are optional and can be unavailable while WebRTC is reconnecting.
+    } finally {
+      this.measuringBitrate = false;
+    }
+  }
 
   command = (command: Command) => {
     if (!this.connection?.open || this.state.status !== 'connected') return;
@@ -416,7 +453,8 @@ export class PlayerSession extends Store<PlayerState> {
     const error = message ?? (this.receivedError ? this.state.error : 'Desktop disconnected. Keep its tab open and tap Reconnect.');
     this.cleanup();
     ++this.generation;
-    this.patch({ status: 'disconnected', streamReady: false, audioEnabled: false, error, playback: { ...this.state.playback, phase: 'paused' } });
+    this.bitrateSample = null;
+    this.patch({ status: 'disconnected', streamReady: false, audioEnabled: false, bitrateKbps: null, error, playback: { ...this.state.playback, phase: 'paused' } });
   }
 
   private cleanup() {

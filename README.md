@@ -19,10 +19,10 @@ For a physical phone, it must be able to open the app address encoded in the QR 
 - The desktop decodes the selected audio file with Web Audio and routes it only to a `MediaStreamAudioDestinationNode`, never to its speakers.
 - PeerJS's default public cloud service handles signaling. The app has no custom server, API, or database.
 - A PeerJS data connection carries the file list, play/pause/next/previous commands, progress, and status.
-- A one-way PeerJS media connection carries an Opus stereo stream with a 128,000 bps sender cap and SDP stereo preference.
+- A one-way PeerJS media connection carries an Opus stereo stream with a 320,000 bps sender cap and SDP stereo preference.
 - A random 192-bit token in the QR/player URL authorizes one player connection for the current desktop page session.
 
-The public PeerJS service requires internet access and has availability and usage limits. WebRTC may fail on restrictive or symmetric-NAT networks because this app does not provide a custom TURN relay. The 128 kbps value is a target/cap; the browser and network can adapt below it.
+The public PeerJS service requires internet access and has availability and usage limits. WebRTC may fail on restrictive or symmetric-NAT networks because this app does not provide a custom TURN relay. The 320 kbps value is a target/cap; the browser and network can adapt below it.
 
 ## Checks
 

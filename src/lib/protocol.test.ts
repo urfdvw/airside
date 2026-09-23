@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { afterEach, describe, it, mock } from 'node:test';
-import { AUDIO_BITRATE, createToken, formatTime, isCommand, isPlayback, playerUrl, stereoOpusSdp } from './protocol.ts';
+import { AUDIO_BITRATE, createToken, formatTime, isCommand, isPlayback, measuredBitrateKbps, playerUrl, stereoOpusSdp } from './protocol.ts';
 
 afterEach(() => mock.restoreAll());
 
@@ -55,4 +55,15 @@ describe('audio negotiation', () => {
 
 describe('formatTime', () => {
   it('formats player timestamps', () => assert.equal(formatTime(125.9), '2:05'));
+});
+
+describe('measuredBitrateKbps', () => {
+  it('calculates bitrate from WebRTC byte and timestamp deltas', () => {
+    assert.equal(measuredBitrateKbps({ bytes: 10_000, timestamp: 1_000 }, { bytes: 26_000, timestamp: 2_000 }), 128);
+  });
+
+  it('ignores invalid or reset counters', () => {
+    assert.equal(measuredBitrateKbps({ bytes: 20, timestamp: 2_000 }, { bytes: 10, timestamp: 3_000 }), null);
+    assert.equal(measuredBitrateKbps({ bytes: 10, timestamp: 2_000 }, { bytes: 20, timestamp: 2_000 }), null);
+  });
 });

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import QRCode from 'qrcode';
 import { AlertCircle, Check, ChevronLeft, Copy, FolderOpen, Library, Link2, LoaderCircle, Music2, Pause, Play, Radio, RefreshCw, SkipBack, SkipForward, Smartphone, Unplug, Volume2, Wifi } from 'lucide-react';
 import { HostSession, PlayerSession } from './lib/session';
-import { formatTime, playerUrl, type Track } from './lib/protocol';
+import { AUDIO_BITRATE, formatTime, playerUrl, type Track } from './lib/protocol';
 
 function App() {
   return window.location.hash.startsWith('#/player') ? <PlayerPage /> : <HomePage />;
@@ -61,7 +61,7 @@ function HomePage() {
           <h1>Listen over the air.<br /><em>Keep files at home.</em></h1>
           <p className="hero-copy">Choose a music folder on this computer, then scan once to listen from your phone. Your files stay local and stream directly between your browsers.</p>
         </div>
-        <div className="privacy-note"><Wifi size={18} /><span>Direct browser-to-browser audio<br /><small>128 kbps stereo Opus target</small></span></div>
+        <div className="privacy-note"><Wifi size={18} /><span>Direct browser-to-browser audio<br /><small>{AUDIO_BITRATE / 1000} kbps stereo Opus target</small></span></div>
       </section>
 
       {(state.error || link.error || actionError) && <div className="notice error" role="alert"><AlertCircle size={18} /><span>{state.error || link.error || actionError}</span>{state.signaling === 'offline' && <button className="text-button" onClick={session.retry}>Retry</button>}</div>}
@@ -109,7 +109,7 @@ function HomePage() {
           <button className="play-main" onClick={() => session.command({ type: state.playback.phase === 'playing' ? 'pause' : 'play' })} aria-label={state.playback.phase === 'playing' ? 'Pause' : 'Play'}>{state.playback.phase === 'loading' ? <LoaderCircle className="spin" /> : state.playback.phase === 'playing' ? <Pause fill="currentColor" /> : <Play fill="currentColor" />}</button>
           <button onClick={() => session.command({ type: 'next' })} aria-label="Next"><SkipForward /></button>
         </div>
-        <div className="stream-stats"><StatusDot active={state.streaming} /><span>{state.streaming ? 'Live' : state.connected ? 'Connecting audio' : 'Phone offline'}</span><small>{state.quality ?? '128 kbps stereo target'}</small></div>
+        <div className="stream-stats"><StatusDot active={state.streaming} /><span>{state.streaming ? 'Live' : state.connected ? 'Connecting audio' : 'Phone offline'}</span><small>{state.quality ?? `${AUDIO_BITRATE / 1000} kbps stereo target`}</small></div>
       </section>}
     </main>
   </div>;
@@ -142,14 +142,14 @@ function PlayerPage() {
 
     <main className="mobile-main">
       {tab === 'library' ? <section className="mobile-library">
-        <div className="mobile-title"><div><p>YOUR LIBRARY</p><h1>{state.folder || 'Music'}</h1></div><span>{state.tracks.length} tracks</span></div>
+        <div className="mobile-title"><div><h1>{state.folder || 'Music'}</h1></div><span>{state.tracks.length} tracks</span></div>
         {state.status === 'connecting' || state.loadingLibrary ? <div className="mobile-empty"><LoaderCircle className="spin" /><strong>Connecting to your desktop…</strong><span>Keep the Airside page open there.</span></div>
           : !state.tracks.length ? <div className="mobile-empty"><Library /><strong>No music yet</strong><span>Open a folder on your desktop to fill this library.</span></div>
           : <TrackList mobile tracks={state.tracks} activeId={state.playback.trackId} playing={state.playback.phase === 'playing'} onSelect={(track) => { session.command({ type: 'play', trackId: track.id }); setTab('player'); }} />}
       </section> : <section className="player-view">
         <button className="back-library" onClick={() => setTab('library')}><ChevronLeft size={20} />Library</button>
         <div className={`album-art ${state.playback.phase === 'playing' ? 'playing' : ''}`}><div className="record-rings"><div className="record-label"><Radio size={36} /></div></div></div>
-        <div className="phone-track-meta"><p>{state.playback.phase === 'loading' ? 'PREPARING STREAM' : state.playback.phase === 'playing' ? 'NOW PLAYING' : 'PAUSED'}</p><h1>{current?.name.replace(/\.[^.]+$/, '') ?? 'Choose a track'}</h1><span>{current?.path.includes('/') ? current.path.slice(0, current.path.lastIndexOf('/')) : state.folder || 'Airside'}</span></div>
+        <div className="phone-track-meta"><p>{state.playback.phase === 'loading' ? 'PREPARING STREAM' : state.playback.phase === 'playing' ? `NOW PLAYING (${state.bitrateKbps === null ? 'measuring…' : `${state.bitrateKbps}kbps`})` : 'PAUSED'}</p><h1>{current?.name.replace(/\.[^.]+$/, '') ?? 'Choose a track'}</h1><span>{current?.path.includes('/') ? current.path.slice(0, current.path.lastIndexOf('/')) : state.folder || 'Airside'}</span></div>
         <div className="progress"><div className="progress-line"><span style={{ width: `${progress}%` }} /></div><div><time>{formatTime(state.playback.position)}</time><time>-{formatTime(Math.max(0, state.playback.duration - state.playback.position))}</time></div></div>
         <div className="phone-controls">
           <button onClick={() => session.command({ type: 'previous' })} disabled={!state.tracks.length} aria-label="Previous track"><SkipBack size={27} fill="currentColor" /></button>
@@ -157,7 +157,6 @@ function PlayerPage() {
           <button onClick={() => session.command({ type: 'next' })} disabled={!state.tracks.length} aria-label="Next track"><SkipForward size={27} fill="currentColor" /></button>
         </div>
         {state.playback.error && <p className="playback-error">{state.playback.error}</p>}
-        <div className="quality-chip"><Radio size={15} /><span>{state.streamReady ? 'Direct stream · Opus stereo · 128 kbps target' : 'Waiting for audio channel'}</span></div>
       </section>}
     </main>
 
