@@ -1,5 +1,7 @@
 export const PROTOCOL_VERSION = 2;
-export const AUDIO_BITRATE = 320_000;
+export const AUDIO_START_BITRATE = 32_000;
+export const AUDIO_BITRATE = 128_000;
+export const AUDIO_RAMP_DELAY_MS = 2_000;
 export const PUBLIC_APP_URL = 'https://urfdvw.github.io/airside/';
 export const PIN_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
 export const PIN_LENGTH = 4;
