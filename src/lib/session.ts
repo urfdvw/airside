@@ -1,7 +1,7 @@
 import Peer, { type DataConnection } from 'peerjs';
 import { AudioEngine } from './audio';
 import { publicTrack, scanFolder, type LocalTrack } from './library';
-import { AUDIO_BITRATE, AUDIO_RAMP_DELAY_MS, AUDIO_START_BITRATE, PROTOCOL_VERSION, createPin, emptyPlayback, errorMessage, hostPeerId, isCommand, isPlayback, isRecord, isTrack, measuredBitrateKbps, stereoOpusSdp, type ByteSample, type Command, type HostMessage, type Playback, type Track } from './protocol';
+import { AUDIO_BITRATE, PROTOCOL_VERSION, createPin, emptyPlayback, errorMessage, hostPeerId, isCommand, isPlayback, isRecord, isTrack, measuredBitrateKbps, stereoOpusSdp, type ByteSample, type Command, type HostMessage, type Playback, type Track } from './protocol';
 
 class Store<T> {
   private listeners = new Set<() => void>();
@@ -52,7 +52,6 @@ export class HostSession extends Store<HostState> {
   private mediaSender: RTCRtpSender | null = null;
   private mediaNegotiating = false;
   private mediaRetryTimer?: ReturnType<typeof setTimeout>;
-  private bitrateRampTimer?: ReturnType<typeof setTimeout>;
   private localTracks: LocalTrack[] = [];
   private scan: AbortController | null = null;
   private timer?: ReturnType<typeof setInterval>;
@@ -67,11 +66,8 @@ export class HostSession extends Store<HostState> {
     const pin = createPin();
     super({ peerId: '', pin, token: pin, signaling: 'connecting', connected: false, streaming: false, audioReady: false, scanning: false, scanCount: 0, skipped: 0, folder: '', tracks: [], playback: { ...emptyPlayback }, error: null, quality: null });
     this.engine = new AudioEngine((playback) => {
-      const wasPlaying = this.state.playback.phase === 'playing';
       this.patch({ playback, audioReady: this.engine.ready });
       this.send({ type: 'state', playback });
-      if (playback.phase === 'playing' && !wasPlaying) this.startBitrateRamp();
-      else if (playback.phase !== 'playing' && wasPlaying) this.resetBitrateRamp();
     }, () => this.move(1, false));
   }
 
@@ -213,10 +209,6 @@ export class HostSession extends Store<HostState> {
         const track = stream.getAudioTracks()[0];
         if (!track) throw new Error('No audio track is available.');
         this.mediaSender = pc.addTrack(track, stream);
-        // Some engines expose encoding parameters only after negotiation.
-        // Keep negotiating if the early safety cap is not available yet;
-        // configureAudio applies it again before playback can ramp up.
-        await this.setSenderBitrate(this.mediaSender, AUDIO_START_BITRATE).catch(() => {});
       }
       const offer = await pc.createOffer();
       const sdp = stereoOpusSdp(offer.sdp ?? '');
@@ -267,43 +259,16 @@ export class HostSession extends Store<HostState> {
     try {
       const sender = pc.getSenders().find((sender) => sender.track?.kind === 'audio');
       if (!sender) throw new Error('No audio sender');
-      this.mediaSender = sender;
-      await this.setSenderBitrate(sender, AUDIO_START_BITRATE);
+      const params = sender.getParameters();
+      if (!params.encodings?.length) throw new Error('No audio encoding');
+      params.encodings.forEach((encoding) => { encoding.maxBitrate = AUDIO_BITRATE; });
+      await sender.setParameters(params);
       const answer = pc.remoteDescription?.sdp ?? '';
       const stereo = /(?:^|[; ])stereo=1(?:;|\r?$)/m.test(answer);
-      if (this.connection?.peerConnection !== pc) return;
-      this.patch({ quality: stereo ? 'Opus stereo · 32 → 128 kbps ramp' : '32 → 128 kbps ramp · stereo unconfirmed' });
-      if (this.engine.snapshot.phase === 'playing') this.startBitrateRamp();
+      if (this.connection?.peerConnection === pc) this.patch({ quality: stereo ? 'Opus · stereo negotiated' : 'Stereo was not confirmed by this browser.' });
     } catch {
-      if (this.connection?.peerConnection === pc) this.patch({ quality: 'This browser could not enforce the 128 kbps cap.' });
+      if (this.connection?.peerConnection === pc) this.patch({ quality: 'This browser could not enforce the 320 kbps cap.' });
     }
-  }
-
-  private async setSenderBitrate(sender: RTCRtpSender, bitrate: number) {
-    const params = sender.getParameters();
-    if (!params.encodings?.length) throw new Error('No audio encoding');
-    params.encodings.forEach((encoding) => { encoding.maxBitrate = bitrate; });
-    await sender.setParameters(params);
-  }
-
-  private startBitrateRamp() {
-    clearTimeout(this.bitrateRampTimer);
-    const sender = this.mediaSender;
-    const connection = this.connection;
-    if (!sender || !connection?.open) return;
-    void this.setSenderBitrate(sender, AUDIO_START_BITRATE).catch(() => {});
-    this.bitrateRampTimer = setTimeout(() => {
-      if (this.mediaSender !== sender || this.connection !== connection || !connection.open || this.engine.snapshot.phase !== 'playing') return;
-      void this.setSenderBitrate(sender, AUDIO_BITRATE).catch(() => {
-        if (this.mediaSender === sender) this.patch({ quality: 'This browser could not enforce the 128 kbps cap.' });
-      });
-    }, AUDIO_RAMP_DELAY_MS);
-  }
-
-  private resetBitrateRamp() {
-    clearTimeout(this.bitrateRampTimer);
-    const sender = this.mediaSender;
-    if (sender) void this.setSenderBitrate(sender, AUDIO_START_BITRATE).catch(() => {});
   }
 
   enableAudio = async () => {
@@ -370,7 +335,6 @@ export class HostSession extends Store<HostState> {
 
   private closeMedia() {
     clearTimeout(this.mediaRetryTimer);
-    clearTimeout(this.bitrateRampTimer);
     this.mediaSender = null;
     this.mediaNegotiating = false;
     this.patch({ streaming: false, quality: null });

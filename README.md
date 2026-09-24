@@ -29,11 +29,11 @@ The production pairing QR uses `https://urfdvw.github.io/airside/`. In developme
 - The desktop decodes the selected audio file with Web Audio and routes it only to a `MediaStreamAudioDestinationNode`, never to its speakers.
 - PeerJS's default public cloud service handles signaling. The app has no custom server, API, or database.
 - A PeerJS data connection carries the file list, playback commands, progress, status, and audio renegotiation messages.
-- The desktop adds a one-way Opus stereo track to that connection’s established WebRTC transport. Each playback starts at 32 kbps and rises to a 128 kbps sender cap after two seconds.
+- The desktop adds a one-way Opus stereo track to that connection’s established WebRTC transport, with a 320,000 bps sender cap and SDP stereo preference.
 - A random four-letter PIN determines the temporary PeerJS host ID and authorizes one player connection for the current desktop page session.
 - The login page accepts that PIN or scans the same direct-player QR shown on the desktop.
 
-The public PeerJS service requires internet access and has availability and usage limits. WebRTC may fail on restrictive or symmetric-NAT networks because this app does not provide a custom TURN relay. The 128 kbps value is a target/cap; the browser and network can adapt below it.
+The public PeerJS service requires internet access and has availability and usage limits. WebRTC may fail on restrictive or symmetric-NAT networks because this app does not provide a custom TURN relay. The 320 kbps value is a target/cap; the browser and network can adapt below it.
 
 ## Checks
 
