@@ -85,7 +85,7 @@ function HomePage() {
           {!state.tracks.length ? <button className="folder-drop" onClick={session.openFolder} disabled={state.scanning}>
             <span className="folder-icon">{state.scanning ? <LoaderCircle className="spin" size={30} /> : <FolderOpen size={30} />}</span>
             <strong>{state.scanning ? `Scanning… ${state.scanCount || ''}` : 'Open a music folder'}</strong>
-            <span>{state.scanning ? 'Looking through subfolders for playable audio' : 'MP3, M4A, AAC, WAV, FLAC, OGG, Opus and WebM'}</span>
+            <span>{state.scanning ? 'Looking through subfolders for playable audio' : 'MP3, AAC, FLAC, WAV, OGG, Opus, ALAC, APE, WavPack, TAK, WMA and DSD'}</span>
           </button> : <>
             <div className="folder-summary"><div className="folder-avatar"><FolderOpen size={22} /></div><div><strong>{state.folder}</strong><span>{state.tracks.length} audio files{state.skipped ? ` · ${state.skipped} other files skipped` : ''}</span></div><button className="secondary small" onClick={session.openFolder}>Change</button></div>
             <TrackList tracks={state.tracks} activeId={state.playback.trackId} playing={state.playback.phase === 'playing'} onSelect={(track) => session.command({ type: 'play', trackId: track.id })} />
@@ -114,7 +114,7 @@ function HomePage() {
 
       {(current || state.connected) && <section className="now-playing-desktop">
         <div className="disc"><Music2 size={22} /></div>
-        <div className="now-meta"><span>NOW STREAMING</span><strong>{current?.name ?? 'Waiting for a track'}</strong><small>{current?.path ?? 'Choose a track on either device'}</small></div>
+        <div className="now-meta"><span>NOW STREAMING</span><strong>{current?.name ?? 'Waiting for a track'}</strong><small>{current?.path ?? 'Choose a track on either device'}</small>{state.playback.phase === 'loading' && <small>Decoding…</small>}{state.playback.error && <small className="now-error" role="alert">{state.playback.error}</small>}</div>
         <div className="desktop-controls">
           <button onClick={() => session.command({ type: 'previous' })} aria-label="Previous"><SkipBack /></button>
           <button className="play-main" onClick={() => session.command({ type: state.playback.phase === 'playing' ? 'pause' : 'play' })} aria-label={state.playback.phase === 'playing' ? 'Pause' : 'Play'}>{state.playback.phase === 'loading' ? <LoaderCircle className="spin" /> : state.playback.phase === 'playing' ? <Pause fill="currentColor" /> : <Play fill="currentColor" />}</button>
@@ -378,7 +378,7 @@ function PlayerPage() {
       </section> : <section className="player-view">
         <button className="back-library" onClick={() => setTab('library')}><ChevronLeft size={20} />Library</button>
         <div className={`album-art ${state.playback.phase === 'playing' ? 'playing' : ''}`}><div className="record-rings"><div className="record-label"><Radio size={36} /></div></div></div>
-        <div className="phone-track-meta"><p>{state.playback.phase === 'loading' ? 'PREPARING STREAM' : state.playback.phase === 'playing' ? `NOW PLAYING (${state.bitrateKbps === null ? 'measuring…' : `${state.bitrateKbps}kbps`})` : 'PAUSED'}</p><h1>{current?.name.replace(/\.[^.]+$/, '') ?? 'Choose a track'}</h1><span>{current?.path.includes('/') ? current.path.slice(0, current.path.lastIndexOf('/')) : state.folder || 'Airside'}</span></div>
+        <div className="phone-track-meta"><p>{state.playback.phase === 'loading' ? 'PREPARING STREAM' : state.playback.phase === 'error' ? 'CANNOT PLAY THIS TRACK' : state.playback.phase === 'playing' ? `NOW PLAYING (${state.bitrateKbps === null ? 'measuring…' : `${state.bitrateKbps}kbps`})` : 'PAUSED'}</p><h1>{current?.name.replace(/\.[^.]+$/, '') ?? 'Choose a track'}</h1><span>{current?.path.includes('/') ? current.path.slice(0, current.path.lastIndexOf('/')) : state.folder || 'Airside'}</span></div>
         <div className="progress">
           <input className="progress-slider" type="range" min={0} max={state.playback.duration || 0} step={0.1} value={displayedPosition} disabled={!current || !state.playback.duration} aria-label="Track position" aria-valuetext={`${formatTime(displayedPosition)} of ${formatTime(state.playback.duration)}`} style={{ '--progress': `${progress}%` } as CSSProperties} onChange={(event) => updateSeek(Number(event.target.value))} onPointerUp={commitSeek} onPointerCancel={commitSeek} onTouchEnd={commitSeek} onKeyUp={commitSeek} onBlur={commitSeek} />
           <div><time>{formatTime(displayedPosition)}</time><time>-{formatTime(Math.max(0, state.playback.duration - displayedPosition))}</time></div>

@@ -1,7 +1,12 @@
 import type { Track } from './protocol';
 
 export interface LocalTrack extends Track { handle: FileSystemFileHandle }
-const audioExtensions = new Set(['mp3', 'm4a', 'aac', 'wav', 'wave', 'flac', 'ogg', 'oga', 'opus', 'aiff', 'aif', 'webm', 'mp4']);
+export const audioExtensions = new Set([
+  // Decoded natively by the browser.
+  'mp3', 'm4a', 'aac', 'wav', 'wave', 'flac', 'ogg', 'oga', 'opus', 'aiff', 'aif', 'webm', 'mp4',
+  // Decoded by the libav.js fallback: ALAC (in .m4a/.caf), Monkey's Audio, WavPack, TAK, WMA, DSD.
+  'caf', 'ape', 'wv', 'tak', 'wma', 'dsf', 'dff',
+]);
 
 export async function scanFolder(directory: FileSystemDirectoryHandle, signal: AbortSignal, onProgress: (count: number) => void): Promise<{ tracks: LocalTrack[]; skipped: number }> {
   const tracks: LocalTrack[] = [];
