@@ -1,3 +1,4 @@
+import { decodeFile } from './decode';
 import type { LocalTrack } from './library';
 import { emptyPlayback, errorMessage, type Playback } from './protocol';
 
@@ -9,6 +10,7 @@ export class AudioEngine {
   private startedAt = 0;
   private offset = 0;
   private revision = 0;
+  private decoding: AbortController | null = null;
   private wantsPlay = false;
   private state: Playback = { ...emptyPlayback };
 
@@ -59,6 +61,8 @@ export class AudioEngine {
 
   async select(track: LocalTrack) {
     const revision = ++this.revision;
+    this.decoding?.abort();
+    const decoding = this.decoding = new AbortController();
     this.stopSource();
     this.buffer = null;
     this.offset = 0;
@@ -67,18 +71,16 @@ export class AudioEngine {
     try {
       if (!this.context || !this.ready) throw new Error('Click Enable streaming on the desktop first.');
       const file = await track.handle.getFile();
-      const bytes = await file.arrayBuffer();
       if (revision !== this.revision) return;
-      const buffer = await this.context.decodeAudioData(bytes);
+      // Whole-file decode: large or high-rate tracks (e.g. DSD) cost a lot of memory as PCM.
+      const buffer = await decodeFile(file, this.context, decoding.signal);
       if (revision !== this.revision) return;
       this.buffer = buffer;
       this.update({ duration: buffer.duration, phase: 'paused' });
       if (this.wantsPlay) this.play();
     } catch (error) {
       if (revision !== this.revision) return;
-      const message = error instanceof DOMException && error.name === 'EncodingError'
-        ? 'This browser cannot decode this file. Try another track.' : errorMessage(error);
-      this.update({ phase: 'error', error: message });
+      this.update({ phase: 'error', error: errorMessage(error) });
     }
   }
 
@@ -128,6 +130,8 @@ export class AudioEngine {
 
   reset() {
     ++this.revision;
+    this.decoding?.abort();
+    this.decoding = null;
     this.stopSource();
     this.buffer = null;
     this.offset = 0;
