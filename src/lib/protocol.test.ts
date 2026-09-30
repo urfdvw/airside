@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { afterEach, describe, it, mock } from 'node:test';
-import { AUDIO_BITRATE, createPin, formatTime, hostPeerId, isCommand, isPin, isPlayback, loginUrl, measuredBitrateKbps, normalizePin, pairingFromUrl, pinPlayerUrl, playerUrl, stereoOpusSdp } from './protocol.ts';
+import { AUDIO_BITRATE, createPin, formatTime, hostPeerId, isCommand, isPin, isPlayback, loginUrl, measuredBitrateKbps, normalizePin, pairingFromUrl, pinPlayerUrl, playerUrl, shuffleTracks, sortTracksByName, stereoOpusSdp } from './protocol.ts';
 
 afterEach(() => mock.restoreAll());
 
@@ -35,6 +35,8 @@ describe('pairing protocol', () => {
   it('accepts only known commands', () => {
     assert.equal(isCommand({ type: 'play', trackId: 'song.mp3' }), true);
     assert.equal(isCommand({ type: 'seek', position: 42.5 }), true);
+    assert.equal(isCommand({ type: 'shuffle', enabled: true }), true);
+    assert.equal(isCommand({ type: 'shuffle', enabled: 'yes' }), false);
     assert.equal(isCommand({ type: 'seek', position: -1 }), false);
     assert.equal(isCommand({ type: 'delete', trackId: 'song.mp3' }), false);
     assert.equal(isCommand({ type: 'play', trackId: 4 }), false);
@@ -44,6 +46,28 @@ describe('pairing protocol', () => {
     assert.equal(isPlayback({ trackId: null, phase: 'paused', position: 0, duration: 1, error: null }), true);
     assert.equal(isPlayback({ trackId: null, phase: 'paused', position: -1, duration: 1, error: null }), false);
     assert.equal(isPlayback({ trackId: null, phase: 'deleted', position: 0, duration: 1, error: null }), false);
+  });
+});
+
+describe('playlist ordering', () => {
+  const tracks = [
+    { id: '10', name: 'Track 10.mp3', path: 'B/Track 10.mp3' },
+    { id: '2', name: 'track 2.mp3', path: 'A/track 2.mp3' },
+    { id: '1', name: 'Track 1.mp3', path: 'C/Track 1.mp3' },
+  ];
+
+  it('sorts naturally by filename without mutating the source', () => {
+    assert.deepEqual(sortTracksByName(tracks).map((track) => track.id), ['1', '2', '10']);
+    assert.deepEqual(tracks.map((track) => track.id), ['10', '2', '1']);
+  });
+
+  it('produces a new non-original shuffle and avoids the previous order', () => {
+    const sorted = sortTracksByName(tracks);
+    const first = shuffleTracks(sorted, [], () => 0.99);
+    const second = shuffleTracks(sorted, first.map((track) => track.id), () => 0.99);
+    assert.notDeepEqual(first.map((track) => track.id), sorted.map((track) => track.id));
+    assert.notDeepEqual(second.map((track) => track.id), first.map((track) => track.id));
+    assert.deepEqual(new Set(second.map((track) => track.id)), new Set(sorted.map((track) => track.id)));
   });
 });
 

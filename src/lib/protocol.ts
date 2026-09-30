@@ -1,4 +1,4 @@
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 export const AUDIO_START_BITRATE = 32_000;
 export const AUDIO_BITRATE = 128_000;
 export const AUDIO_RAMP_DELAY_MS = 2_000;
@@ -39,13 +39,15 @@ export type Command =
   | { type: 'pause' }
   | { type: 'next' }
   | { type: 'previous' }
-  | { type: 'seek'; position: number };
+  | { type: 'seek'; position: number }
+  | { type: 'shuffle'; enabled: boolean };
 export type HostMessage =
   | { type: 'welcome'; version: number }
   | { type: 'library-start'; folder: string }
   | { type: 'library-chunk'; tracks: Track[] }
   | { type: 'library-end' }
   | { type: 'media-offer'; sdp: string }
+  | { type: 'shuffle'; enabled: boolean }
   | { type: 'state'; playback: Playback }
   | { type: 'error'; message: string }
   | { type: 'ping' };
@@ -58,7 +60,29 @@ export function isCommand(value: unknown): value is Command {
   if (!isRecord(value)) return false;
   if (value.type === 'play') return value.trackId === undefined || typeof value.trackId === 'string';
   if (value.type === 'seek') return typeof value.position === 'number' && Number.isFinite(value.position) && value.position >= 0;
+  if (value.type === 'shuffle') return typeof value.enabled === 'boolean';
   return ['pause', 'next', 'previous'].includes(String(value.type));
+}
+
+export function sortTracksByName<T extends Pick<Track, 'name' | 'path'>>(tracks: readonly T[]): T[] {
+  return [...tracks].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
+    || a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: 'base' }));
+}
+
+export function shuffleTracks<T extends Pick<Track, 'id'>>(tracks: readonly T[], previousOrder: readonly string[] = [], random = Math.random): T[] {
+  const original = [...tracks];
+  const shuffled = [...tracks];
+  for (let index = shuffled.length - 1; index > 0; index--) {
+    const target = Math.floor(random() * (index + 1));
+    [shuffled[index], shuffled[target]] = [shuffled[target], shuffled[index]];
+  }
+  const matches = (order: readonly string[]) => order.length === shuffled.length && shuffled.every((track, index) => track.id === order[index]);
+  if (shuffled.length > 1 && shuffled.every((track, index) => track.id === original[index].id)) shuffled.push(shuffled.shift()!);
+  if (shuffled.length > 2 && matches(previousOrder)) {
+    [shuffled[0], shuffled[1]] = [shuffled[1], shuffled[0]];
+    if (shuffled.every((track, index) => track.id === original[index].id)) shuffled.push(shuffled.shift()!);
+  }
+  return shuffled;
 }
 
 export function isPlayback(value: unknown): value is Playback {

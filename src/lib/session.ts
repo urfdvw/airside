@@ -1,7 +1,7 @@
 import Peer, { type DataConnection } from 'peerjs';
 import { AudioEngine } from './audio';
 import { publicTrack, scanFolder, type LocalTrack } from './library';
-import { AUDIO_BITRATE, AUDIO_RAMP_DELAY_MS, AUDIO_START_BITRATE, PROTOCOL_VERSION, createPin, emptyPlayback, errorMessage, hostPeerId, isCommand, isPlayback, isRecord, isTrack, measuredBitrateKbps, stereoOpusSdp, type ByteSample, type Command, type HostMessage, type Playback, type Track } from './protocol';
+import { AUDIO_BITRATE, AUDIO_RAMP_DELAY_MS, AUDIO_START_BITRATE, PROTOCOL_VERSION, createPin, emptyPlayback, errorMessage, hostPeerId, isCommand, isPlayback, isRecord, isTrack, measuredBitrateKbps, shuffleTracks, sortTracksByName, stereoOpusSdp, type ByteSample, type Command, type HostMessage, type Playback, type Track } from './protocol';
 
 class Store<T> {
   private listeners = new Set<() => void>();
@@ -41,6 +41,7 @@ export interface HostState {
   skipped: number;
   folder: string;
   tracks: Track[];
+  shuffle: boolean;
   playback: Playback;
   error: string | null;
   quality: string | null;
@@ -54,6 +55,7 @@ export class HostSession extends Store<HostState> {
   private mediaRetryTimer?: ReturnType<typeof setTimeout>;
   private bitrateRampTimer?: ReturnType<typeof setTimeout>;
   private localTracks: LocalTrack[] = [];
+  private lastShuffleOrder: string[] = [];
   private scan: AbortController | null = null;
   private timer?: ReturnType<typeof setInterval>;
   private signalTimer?: ReturnType<typeof setTimeout>;
@@ -65,7 +67,7 @@ export class HostSession extends Store<HostState> {
 
   constructor() {
     const pin = createPin();
-    super({ peerId: '', pin, token: pin, signaling: 'connecting', connected: false, streaming: false, audioReady: false, scanning: false, scanCount: 0, skipped: 0, folder: '', tracks: [], playback: { ...emptyPlayback }, error: null, quality: null });
+    super({ peerId: '', pin, token: pin, signaling: 'connecting', connected: false, streaming: false, audioReady: false, scanning: false, scanCount: 0, skipped: 0, folder: '', tracks: [], shuffle: false, playback: { ...emptyPlayback }, error: null, quality: null });
     this.engine = new AudioEngine((playback) => {
       const wasPlaying = this.state.playback.phase === 'playing';
       this.patch({ playback, audioReady: this.engine.ready });
@@ -198,6 +200,7 @@ export class HostSession extends Store<HostState> {
       this.send({ type: 'library-chunk', tracks: this.state.tracks.slice(index, index + 100) });
     }
     this.send({ type: 'library-end' });
+    this.send({ type: 'shuffle', enabled: this.state.shuffle });
   }
 
   private async ensureMedia() {
@@ -333,8 +336,10 @@ export class HostSession extends Store<HostState> {
       const { tracks, skipped } = await scanFolder(directory, scan.signal, (scanCount) => this.patch({ scanCount }));
       if (this.disposed || scan.signal.aborted) return;
       this.engine.reset();
-      this.localTracks = tracks;
-      this.patch({ folder: directory.name, tracks: tracks.map(publicTrack), skipped, error: null });
+      this.lastShuffleOrder = [];
+      this.localTracks = this.state.shuffle ? shuffleTracks(tracks) : sortTracksByName(tracks);
+      if (this.state.shuffle) this.lastShuffleOrder = this.localTracks.map((track) => track.id);
+      this.patch({ folder: directory.name, tracks: this.localTracks.map(publicTrack), skipped, error: null });
       this.sendLibrary();
       this.ensureMedia();
     } catch (error) {
@@ -347,6 +352,7 @@ export class HostSession extends Store<HostState> {
     if (command.type === 'next') { this.move(1); return; }
     if (command.type === 'previous') { this.move(-1); return; }
     if (command.type === 'seek') { this.engine.seek(command.position); return; }
+    if (command.type === 'shuffle') { this.setShuffle(command.enabled); return; }
     const id = command.trackId;
     if (id) {
       const track = this.localTracks.find((track) => track.id === id);
@@ -358,6 +364,15 @@ export class HostSession extends Store<HostState> {
       if (track) void this.engine.select(track);
     }
   };
+
+  private setShuffle(enabled: boolean) {
+    if (enabled === this.state.shuffle) return;
+    const sorted = sortTracksByName(this.localTracks);
+    this.localTracks = enabled ? shuffleTracks(sorted, this.lastShuffleOrder) : sorted;
+    if (enabled) this.lastShuffleOrder = this.localTracks.map((track) => track.id);
+    this.patch({ shuffle: enabled, tracks: this.localTracks.map(publicTrack) });
+    this.sendLibrary();
+  }
 
   private move(direction: number, wrap = true) {
     if (!this.localTracks.length) return;
@@ -400,6 +415,7 @@ export class HostSession extends Store<HostState> {
 export interface PlayerState {
   status: 'connecting' | 'connected' | 'disconnected';
   tracks: Track[];
+  shuffle: boolean;
   folder: string;
   loadingLibrary: boolean;
   playback: Playback;
@@ -429,7 +445,7 @@ export class PlayerSession extends Store<PlayerState> {
   private mediaRetryTimer?: ReturnType<typeof setTimeout>;
 
   constructor(private hostId: string, private token: string) {
-    super({ status: 'connecting', tracks: [], folder: '', loadingLibrary: false, playback: { ...emptyPlayback }, streamReady: false, audioEnabled: false, bitrateKbps: null, volume: 1, error: null });
+    super({ status: 'connecting', tracks: [], folder: '', loadingLibrary: false, shuffle: false, playback: { ...emptyPlayback }, streamReady: false, audioEnabled: false, bitrateKbps: null, volume: 1, error: null });
     this.audio.setAttribute('playsinline', '');
     this.audio.autoplay = true;
   }
@@ -535,6 +551,8 @@ export class PlayerSession extends Store<PlayerState> {
       this.pendingTracks.push(...data.tracks);
     } else if (data.type === 'library-end') {
       this.patch({ tracks: this.pendingTracks, loadingLibrary: false });
+    } else if (data.type === 'shuffle' && typeof data.enabled === 'boolean') {
+      this.patch({ shuffle: data.enabled });
     } else if (data.type === 'media-offer' && typeof data.sdp === 'string') {
       void this.acceptMediaOffer(data.sdp);
     } else if (data.type === 'state' && isPlayback(data.playback)) {
@@ -608,7 +626,7 @@ export class PlayerSession extends Store<PlayerState> {
 
   command = (command: Command) => {
     if (!this.connection?.open || this.state.status !== 'connected') return;
-    if (command.type !== 'pause') void this.enableAudio();
+    if (['play', 'next', 'previous', 'seek'].includes(command.type)) void this.enableAudio();
     this.connection.send(command);
   };
 

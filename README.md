@@ -33,6 +33,7 @@ The production pairing QR uses `https://urfdvw.github.io/airside/`. In developme
 - PeerJS's default public cloud service handles signaling. The app has no custom server, API, or database.
 - A PeerJS data connection carries the file list, playback commands, progress, status, and audio renegotiation messages.
 - The desktop adds a one-way Opus stereo track to that connection’s established WebRTC transport. Each playback starts at 32 kbps and rises to a 128 kbps sender cap after two seconds.
+- Shuffle reorders the authoritative playlist on both devices without interrupting the active track; turning it off restores natural filename order.
 - A random four-letter PIN determines the temporary PeerJS host ID and authorizes one player connection for the current desktop page session.
 - The login page accepts that PIN or scans the same direct-player QR shown on the desktop.
 

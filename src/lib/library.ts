@@ -1,4 +1,4 @@
-import type { Track } from './protocol';
+import { sortTracksByName, type Track } from './protocol.ts';
 
 export interface LocalTrack extends Track { handle: FileSystemFileHandle }
 export const audioExtensions = new Set([
@@ -30,8 +30,7 @@ export async function scanFolder(directory: FileSystemDirectoryHandle, signal: A
   }
   await visit(directory, '');
   signal.throwIfAborted();
-  tracks.sort((a, b) => a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: 'base' }));
-  return { tracks, skipped };
+  return { tracks: sortTracksByName(tracks), skipped };
 }
 
 export function publicTrack({ handle: _handle, ...track }: LocalTrack): Track { return track; }

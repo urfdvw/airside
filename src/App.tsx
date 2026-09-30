@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
 import QRCode from 'qrcode';
-import { AlertCircle, Camera, ChevronLeft, FolderOpen, Library, LoaderCircle, Music2, Pause, Play, Radio, RefreshCw, ScanLine, SkipBack, SkipForward, Smartphone, Unplug, Volume2, Wifi, X } from 'lucide-react';
+import { AlertCircle, Camera, ChevronLeft, FolderOpen, Library, LoaderCircle, Music2, Pause, Play, Radio, RefreshCw, ScanLine, Shuffle, SkipBack, SkipForward, Smartphone, Unplug, Volume2, Wifi, X } from 'lucide-react';
 import { HostSession, PlayerSession } from './lib/session';
 import { AUDIO_BITRATE, PUBLIC_APP_URL, formatTime, hostPeerId, isPin, loginUrl, normalizePin, pairingFromUrl, playerUrl, type Track } from './lib/protocol';
 
@@ -80,7 +80,7 @@ function HomePage() {
         <section className="panel library-panel">
           <div className="panel-heading">
             <div><span className="step">01</span><h2>Choose your library</h2></div>
-            {state.tracks.length > 0 && <span className="count">{state.tracks.length} tracks</span>}
+            {state.tracks.length > 0 && <div className="library-actions"><span className="count">{state.tracks.length} tracks</span><ShuffleToggle active={state.shuffle} onToggle={() => session.command({ type: 'shuffle', enabled: !state.shuffle })} /></div>}
           </div>
           {!state.tracks.length ? <button className="folder-drop" onClick={session.openFolder} disabled={state.scanning}>
             <span className="folder-icon">{state.scanning ? <LoaderCircle className="spin" size={30} /> : <FolderOpen size={30} />}</span>
@@ -235,6 +235,10 @@ function TrackList({ tracks, activeId, playing, onSelect, mobile = false }: { tr
   </div>;
 }
 
+function ShuffleToggle({ active, onToggle }: { active: boolean; onToggle: () => void }) {
+  return <button className={`shuffle-toggle ${active ? 'active' : ''}`} type="button" aria-label={active ? 'Turn shuffle off' : 'Turn shuffle on'} aria-pressed={active} title={active ? 'Shuffle on' : 'Shuffle off'} onClick={onToggle}><Shuffle size={16} /><span>Shuffle</span></button>;
+}
+
 function PlayerPage() {
   const params = useMemo(() => new URLSearchParams(window.location.hash.split('?')[1] ?? ''), []);
   const session = useMemo(() => new PlayerSession(params.get('peer') ?? '', params.get('token') ?? ''), [params]);
@@ -371,12 +375,12 @@ function PlayerPage() {
 
     <main className="mobile-main" ref={scrollSurface}>
       {tab === 'library' ? <section className={`mobile-library ${current ? 'has-mini-player' : ''}`}>
-        <div className="mobile-title"><div><h1>{state.folder || 'Music'}</h1></div><span>{state.tracks.length} tracks</span></div>
+        <div className="mobile-title"><div><h1>{state.folder || 'Music'}</h1></div><div className="mobile-library-actions"><span>{state.tracks.length} tracks</span><ShuffleToggle active={state.shuffle} onToggle={() => session.command({ type: 'shuffle', enabled: !state.shuffle })} /></div></div>
         {state.status === 'connecting' || state.loadingLibrary ? <div className="mobile-empty"><LoaderCircle className="spin" /><strong>Connecting to your desktop…</strong><span>Keep the Airside page open there.</span></div>
           : !state.tracks.length ? <div className="mobile-empty"><Library /><strong>No music yet</strong><span>Open a folder on your desktop to fill this library.</span></div>
           : <TrackList mobile tracks={state.tracks} activeId={state.playback.trackId} playing={state.playback.phase === 'playing'} onSelect={(track) => { session.command({ type: 'play', trackId: track.id }); setTab('player'); }} />}
       </section> : <section className="player-view">
-        <button className="back-library" onClick={() => setTab('library')}><ChevronLeft size={20} />Library</button>
+        <div className="player-toolbar"><button className="back-library" onClick={() => setTab('library')}><ChevronLeft size={20} />Library</button><ShuffleToggle active={state.shuffle} onToggle={() => session.command({ type: 'shuffle', enabled: !state.shuffle })} /></div>
         <div className={`album-art ${state.playback.phase === 'playing' ? 'playing' : ''}`}><div className="record-rings"><div className="record-label"><Radio size={36} /></div></div></div>
         <div className="phone-track-meta"><p>{state.playback.phase === 'loading' ? 'PREPARING STREAM' : state.playback.phase === 'error' ? 'CANNOT PLAY THIS TRACK' : state.playback.phase === 'playing' ? `NOW PLAYING (${state.bitrateKbps === null ? 'measuring…' : `${state.bitrateKbps}kbps`})` : 'PAUSED'}</p><h1>{current?.name.replace(/\.[^.]+$/, '') ?? 'Choose a track'}</h1><span>{current?.path.includes('/') ? current.path.slice(0, current.path.lastIndexOf('/')) : state.folder || 'Airside'}</span></div>
         <div className="progress">
