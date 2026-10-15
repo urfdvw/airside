@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { afterEach, describe, it, mock } from 'node:test';
-import { AUDIO_BITRATE, createPin, formatTime, hostPeerId, isCommand, isPin, isPlayback, loginUrl, measuredBitrateKbps, normalizePin, pairingFromUrl, pinPlayerUrl, playerUrl, shuffleTracks, sortTracksByName, stereoOpusSdp } from './protocol.ts';
+import { createPin, formatTime, hostPeerId, isAudioBatch, isCommand, isPin, isPlayback, isPlayerMessage, isStreamStart, joinPackets, loginUrl, normalizePin, opusPreSkip, pairingFromUrl, pinPlayerUrl, playerUrl, shuffleTracks, sortTracksByName, splitPackets } from './protocol.ts';
 
 afterEach(() => mock.restoreAll());
 
@@ -71,38 +71,36 @@ describe('playlist ordering', () => {
   });
 });
 
-describe('audio negotiation', () => {
-  it('adds stereo and bitrate parameters to the Opus audio payload only', () => {
-    const input = [
-      'v=0',
-      'm=audio 9 UDP/TLS/RTP/SAVPF 111 0',
-      'a=rtpmap:111 opus/48000/2',
-      'a=fmtp:111 minptime=10;useinbandfec=1',
-      'm=video 9 UDP/TLS/RTP/SAVPF 96',
-      'a=rtpmap:96 VP8/90000',
-    ].join('\r\n');
-    const result = stereoOpusSdp(input);
-    assert.match(result, new RegExp(`a=fmtp:111 minptime=10;useinbandfec=1;stereo=1;sprop-stereo=1;maxaveragebitrate=${AUDIO_BITRATE};usedtx=0`));
-    assert.match(result, /a=rtpmap:96 VP8\/90000/);
+describe('audio stream messages', () => {
+  it('round-trips Opus packets through a batch', () => {
+    const packets = [new Uint8Array([1, 2, 3]), new Uint8Array([]), new Uint8Array([4])];
+    const batch = { type: 'audio', streamId: 2, ...joinPackets(packets) };
+    assert.equal(isAudioBatch(batch), true);
+    assert.deepEqual(splitPackets(batch).map((packet) => [...packet]), [[1, 2, 3], [], [4]]);
   });
 
-  it('creates an Opus fmtp line if the offer omits it', () => {
-    const result = stereoOpusSdp('v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=rtpmap:111 opus/48000/2\r\n');
-    assert.match(result, new RegExp(`a=fmtp:111 stereo=1;sprop-stereo=1;maxaveragebitrate=${AUDIO_BITRATE};usedtx=0`));
+  it('rejects batches whose sizes do not match the data', () => {
+    assert.equal(isAudioBatch({ type: 'audio', streamId: 1, data: new ArrayBuffer(4), sizes: [3] }), false);
+    assert.equal(isAudioBatch({ type: 'audio', streamId: 1, data: [1, 2], sizes: [2] }), false);
+  });
+
+  it('validates stream starts and player messages', () => {
+    assert.equal(isStreamStart({ type: 'stream-start', streamId: 1, trackId: 'a.flac', start: 12.5, frames: 48_000, preSkip: 312 }), true);
+    assert.equal(isStreamStart({ type: 'stream-start', streamId: 1, trackId: 'a.flac', start: -1, frames: 48_000, preSkip: 312 }), false);
+    assert.equal(isPlayerMessage({ type: 'progress', streamId: 3, position: 1.5, buffered: 20 }), true);
+    assert.equal(isPlayerMessage({ type: 'progress', streamId: 3, position: Number.NaN, buffered: 20 }), false);
+    assert.equal(isPlayerMessage({ type: 'ended', streamId: 3 }), true);
+    assert.equal(isPlayerMessage({ type: 'media-answer', sdp: '' }), false);
+  });
+
+  it('reads the pre-skip from an OpusHead header', () => {
+    const head = new Uint8Array([79, 112, 117, 115, 72, 101, 97, 100, 1, 2, 56, 1, 128, 187, 0, 0, 0, 0, 0]);
+    assert.equal(opusPreSkip(head), 312);
+    assert.equal(opusPreSkip(new Uint8Array(4), 100), 100);
+    assert.equal(opusPreSkip(undefined), 312);
   });
 });
 
 describe('formatTime', () => {
   it('formats player timestamps', () => assert.equal(formatTime(125.9), '2:05'));
-});
-
-describe('measuredBitrateKbps', () => {
-  it('calculates bitrate from WebRTC byte and timestamp deltas', () => {
-    assert.equal(measuredBitrateKbps({ bytes: 10_000, timestamp: 1_000 }, { bytes: 26_000, timestamp: 2_000 }), 128);
-  });
-
-  it('ignores invalid or reset counters', () => {
-    assert.equal(measuredBitrateKbps({ bytes: 20, timestamp: 2_000 }, { bytes: 10, timestamp: 3_000 }), null);
-    assert.equal(measuredBitrateKbps({ bytes: 10, timestamp: 2_000 }, { bytes: 20, timestamp: 2_000 }), null);
-  });
 });

@@ -7,7 +7,7 @@
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build && node scripts/generate-rabbit-qr.mjs",
     "preview": "vite preview --host 0.0.0.0",
-    "test": "node --test --experimental-strip-types src/lib/protocol.test.ts src/lib/fallback-decode.test.ts"
+    "test": "node --test --experimental-strip-types src/lib/protocol.test.ts src/lib/fallback-decode.test.ts src/lib/stream.worklet.test.ts"
   },
   "repository": {
     "type": "git",
@@ -24,6 +24,7 @@
   "dependencies": {
     "jsqr": "^1.4.0",
     "lucide-react": "^1.47.0",
+    "opus-decoder": "^0.7.12",
     "peerjs": "^1.5.5",
     "qrcode": "^1.5.4",
     "react": "^19.3.0",

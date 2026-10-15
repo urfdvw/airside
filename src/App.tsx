@@ -90,14 +90,14 @@ function HomePage() {
             <div className="folder-summary"><div className="folder-avatar"><FolderOpen size={22} /></div><div><strong>{state.folder}</strong><span>{state.tracks.length} audio files{state.skipped ? ` · ${state.skipped} other files skipped` : ''}</span></div><button className="secondary small" onClick={session.openFolder}>Change</button></div>
             <TrackList tracks={state.tracks} activeId={state.playback.trackId} playing={state.playback.phase === 'playing'} onSelect={(track) => session.command({ type: 'play', trackId: track.id })} />
           </>}
-          <div className="desktop-audio-note"><Volume2 size={15} /><span>Desktop speakers stay silent. Audio only goes to the paired player.</span>{state.tracks.length > 0 && !state.audioReady && <button className="text-button" onClick={session.enableAudio}>Enable streaming</button>}</div>
+          <div className="desktop-audio-note"><Volume2 size={15} /><span>Desktop speakers stay silent. Audio only goes to the paired player.</span></div>
         </section>
 
         <section className="panel pairing-panel">
           <div className="panel-heading"><div><span className="step">02</span><h2>Pair your phone</h2></div></div>
           <p className="panel-copy">Scan this code with your camera, or enter the four-letter PIN on the login page.</p>
           <div className={`qr-frame ${state.connected ? 'paired' : ''}`}>
-            {state.connected ? <div className="paired-state"><span className="phone-orbit"><Smartphone size={42} /></span><h3>Phone connected</h3><p>{state.streaming ? 'Audio channel is live' : 'Preparing audio channel…'}</p></div>
+            {state.connected ? <div className="paired-state"><span className="phone-orbit"><Smartphone size={42} /></span><h3>Phone connected</h3><p>{state.phoneBuffer === null ? 'Waiting for audio…' : 'Audio is streaming'}</p></div>
               : qr ? <img src={qr} alt="QR code for the mobile player URL" /> : <div className="qr-loading"><LoaderCircle className="spin" /><span>Creating secure link…</span></div>}
           </div>
           <div className="pair-pin" aria-label={`Pairing PIN ${state.pin}`}>
@@ -120,7 +120,7 @@ function HomePage() {
           <button className="play-main" onClick={() => session.command({ type: state.playback.phase === 'playing' ? 'pause' : 'play' })} aria-label={state.playback.phase === 'playing' ? 'Pause' : 'Play'}>{state.playback.phase === 'loading' ? <LoaderCircle className="spin" /> : state.playback.phase === 'playing' ? <Pause fill="currentColor" /> : <Play fill="currentColor" />}</button>
           <button onClick={() => session.command({ type: 'next' })} aria-label="Next"><SkipForward /></button>
         </div>
-        <div className="stream-stats"><StatusDot active={state.streaming} /><span>{state.streaming ? 'Live' : state.connected ? 'Connecting audio' : 'Phone offline'}</span><small>{state.quality ?? `${AUDIO_BITRATE / 1000} kbps stereo target`}</small></div>
+        <div className="stream-stats"><StatusDot active={state.phoneBuffer !== null} /><span>{!state.connected ? 'Phone offline' : state.phoneBuffer === null ? 'Connecting audio' : `${Math.round(state.phoneBuffer)} s buffered on phone`}</span><small>{`Opus ${AUDIO_BITRATE / 1000} kbps stereo`}</small></div>
       </section>}
     </main>
   </div>;
@@ -382,14 +382,14 @@ function PlayerPage() {
       </section> : <section className="player-view">
         <div className="player-toolbar"><button className="back-library" onClick={() => setTab('library')}><ChevronLeft size={20} />Library</button><ShuffleToggle active={state.shuffle} onToggle={() => session.command({ type: 'shuffle', enabled: !state.shuffle })} /></div>
         <div className={`album-art ${state.playback.phase === 'playing' ? 'playing' : ''}`}><div className="record-rings"><div className="record-label"><Radio size={36} /></div></div></div>
-        <div className="phone-track-meta"><p>{state.playback.phase === 'loading' ? 'PREPARING STREAM' : state.playback.phase === 'error' ? 'CANNOT PLAY THIS TRACK' : state.playback.phase === 'playing' ? `NOW PLAYING (${state.bitrateKbps === null ? 'measuring…' : `${state.bitrateKbps}kbps`})` : 'PAUSED'}</p><h1>{current?.name.replace(/\.[^.]+$/, '') ?? 'Choose a track'}</h1><span>{current?.path.includes('/') ? current.path.slice(0, current.path.lastIndexOf('/')) : state.folder || 'Airside'}</span></div>
+        <div className="phone-track-meta"><p>{state.playback.phase === 'loading' ? 'PREPARING STREAM' : state.playback.phase === 'error' ? 'CANNOT PLAY THIS TRACK' : state.playback.phase === 'playing' ? (state.buffering ? 'BUFFERING…' : `NOW PLAYING${state.buffered === null ? '' : ` (${Math.floor(state.buffered)}s BUFFERED)`}`) : 'PAUSED'}</p><h1>{current?.name.replace(/\.[^.]+$/, '') ?? 'Choose a track'}</h1><span>{current?.path.includes('/') ? current.path.slice(0, current.path.lastIndexOf('/')) : state.folder || 'Airside'}</span></div>
         <div className="progress">
           <input className="progress-slider" type="range" min={0} max={state.playback.duration || 0} step={0.1} value={displayedPosition} disabled={!current || !state.playback.duration} aria-label="Track position" aria-valuetext={`${formatTime(displayedPosition)} of ${formatTime(state.playback.duration)}`} style={{ '--progress': `${progress}%` } as CSSProperties} onChange={(event) => updateSeek(Number(event.target.value))} onPointerUp={commitSeek} onPointerCancel={commitSeek} onTouchEnd={commitSeek} onKeyUp={commitSeek} onBlur={commitSeek} />
           <div><time>{formatTime(displayedPosition)}</time><time>-{formatTime(Math.max(0, state.playback.duration - displayedPosition))}</time></div>
         </div>
         <div className="phone-controls">
           <button onClick={() => session.command({ type: 'previous' })} disabled={!state.tracks.length} aria-label="Previous track"><SkipBack size={27} fill="currentColor" /></button>
-          <button className="phone-play" onClick={() => session.command({ type: state.playback.phase === 'playing' ? 'pause' : 'play' })} disabled={!state.tracks.length || state.status !== 'connected'} aria-label={state.playback.phase === 'playing' ? 'Pause' : 'Play'}>{state.playback.phase === 'loading' ? <LoaderCircle className="spin" /> : state.playback.phase === 'playing' ? <Pause size={31} fill="currentColor" /> : <Play size={31} fill="currentColor" />}</button>
+          <button className="phone-play" onClick={() => session.command({ type: state.playback.phase === 'playing' ? 'pause' : 'play' })} disabled={!state.tracks.length || state.status !== 'connected'} aria-label={state.playback.phase === 'playing' ? 'Pause' : 'Play'}>{state.playback.phase === 'loading' || state.buffering ? <LoaderCircle className="spin" /> : state.playback.phase === 'playing' ? <Pause size={31} fill="currentColor" /> : <Play size={31} fill="currentColor" />}</button>
           <button onClick={() => session.command({ type: 'next' })} disabled={!state.tracks.length} aria-label="Next track"><SkipForward size={27} fill="currentColor" /></button>
         </div>
         {state.playback.error && <p className="playback-error">{state.playback.error}</p>}
