@@ -1,9 +1,7 @@
 import Peer, { type DataConnection } from 'peerjs';
-import { PlaybackEngine } from './audio';
+import { AudioEngine } from './audio';
 import { publicTrack, scanFolder, type LocalTrack } from './library';
-import { PROTOCOL_VERSION, createPin, emptyPlayback, errorMessage, hostPeerId, isAudioBatch, isCommand, isPlayback, isPlayerMessage, isRecord, isStreamStart, isTrack, shuffleTracks, sortTracksByName, type Command, type HostMessage, type Playback, type PlayerMessage, type Track } from './protocol';
-import { StreamPlayer, type StreamStatus } from './stream-player';
-import { StreamSender, isStreamingSupported } from './stream-sender';
+import { AUDIO_BITRATE, AUDIO_RAMP_DELAY_MS, AUDIO_START_BITRATE, PROTOCOL_VERSION, createPin, emptyPlayback, errorMessage, hostPeerId, isCommand, isPlayback, isRecord, isTrack, measuredBitrateKbps, shuffleTracks, sortTracksByName, stereoOpusSdp, type ByteSample, type Command, type HostMessage, type Playback, type Track } from './protocol';
 
 class Store<T> {
   private listeners = new Set<() => void>();
@@ -36,8 +34,8 @@ export interface HostState {
   token: string;
   signaling: 'connecting' | 'online' | 'offline';
   connected: boolean;
-  /** Seconds of audio buffered on the phone, from its latest report. */
-  phoneBuffer: number | null;
+  streaming: boolean;
+  audioReady: boolean;
   scanning: boolean;
   scanCount: number;
   skipped: number;
@@ -46,12 +44,16 @@ export interface HostState {
   shuffle: boolean;
   playback: Playback;
   error: string | null;
+  quality: string | null;
 }
 
 export class HostSession extends Store<HostState> {
   private peer: Peer | null = null;
   private connection: DataConnection | null = null;
-  private sender: StreamSender;
+  private mediaSender: RTCRtpSender | null = null;
+  private mediaNegotiating = false;
+  private mediaRetryTimer?: ReturnType<typeof setTimeout>;
+  private bitrateRampTimer?: ReturnType<typeof setTimeout>;
   private localTracks: LocalTrack[] = [];
   private lastShuffleOrder: string[] = [];
   private scan: AbortController | null = null;
@@ -60,31 +62,19 @@ export class HostSession extends Store<HostState> {
   private peerReconnectTimer?: ReturnType<typeof setTimeout>;
   private lastPong = 0;
   private lastPing = 0;
-  private engine: PlaybackEngine;
+  private engine: AudioEngine;
   private disposed = false;
 
   constructor() {
     const pin = createPin();
-    super({ peerId: '', pin, token: pin, signaling: 'connecting', connected: false, phoneBuffer: null, scanning: false, scanCount: 0, skipped: 0, folder: '', tracks: [], shuffle: false, playback: { ...emptyPlayback }, error: null });
-    this.sender = new StreamSender(
-      (message) => this.send(message),
-      () => {
-        const connection = this.connection;
-        if (!connection?.open || !connection.dataChannel) return null;
-        return { channel: connection.dataChannel, queued: (connection as DataConnection & { bufferSize?: number }).bufferSize ?? 0 };
-      },
-      (message) => this.engine.fail(message),
-    );
-    this.engine = new PlaybackEngine((playback) => {
-      this.patch({ playback });
+    super({ peerId: '', pin, token: pin, signaling: 'connecting', connected: false, streaming: false, audioReady: false, scanning: false, scanCount: 0, skipped: 0, folder: '', tracks: [], shuffle: false, playback: { ...emptyPlayback }, error: null, quality: null });
+    this.engine = new AudioEngine((playback) => {
+      const wasPlaying = this.state.playback.phase === 'playing';
+      this.patch({ playback, audioReady: this.engine.ready });
       this.send({ type: 'state', playback });
-    }, (request) => {
-      if (request) this.sender.start(request);
-      else this.sender.stop();
+      if (playback.phase === 'playing' && !wasPlaying) this.startBitrateRamp();
+      else if (playback.phase !== 'playing' && wasPlaying) this.resetBitrateRamp();
     }, () => this.move(1, false));
-    void isStreamingSupported().then((supported) => {
-      if (!supported && !this.disposed) this.patch({ error: 'This browser cannot encode Opus audio. Use a current desktop Chrome or Edge.' });
-    });
   }
 
   start() {
@@ -92,7 +82,7 @@ export class HostSession extends Store<HostState> {
     this.openPeer();
     this.timer = setInterval(() => {
       const playback = this.engine.snapshot;
-      this.patch({ playback });
+      this.patch({ playback, audioReady: this.engine.ready });
       this.send({ type: 'state', playback });
       if (this.connection?.open && Date.now() - this.lastPing > 5000) {
         this.lastPing = Date.now();
@@ -116,6 +106,7 @@ export class HostSession extends Store<HostState> {
       clearTimeout(this.signalTimer);
       clearTimeout(this.peerReconnectTimer);
       this.patch({ peerId, signaling: 'online', error: null });
+      if (this.connection?.open) this.ensureMedia();
     });
     peer.on('connection', (connection) => { if (this.peer === peer) this.accept(connection); else connection.close(); });
     peer.on('call', (call) => call.close());
@@ -192,7 +183,9 @@ export class HostSession extends Store<HostState> {
     });
     connection.on('data', (data: unknown) => {
       if (this.connection !== connection) return;
-      if (isPlayerMessage(data)) this.receive(data);
+      if (isRecord(data) && data.type === 'pong') this.lastPong = Date.now();
+      else if (isRecord(data) && data.type === 'ready') this.ensureMedia();
+      else if (isRecord(data) && data.type === 'media-answer' && typeof data.sdp === 'string') void this.acceptMediaAnswer(data.sdp);
       else if (isCommand(data)) this.command(data);
     });
     connection.on('close', () => { if (this.connection === connection) this.disconnect(); });
@@ -210,20 +203,120 @@ export class HostSession extends Store<HostState> {
     this.send({ type: 'shuffle', enabled: this.state.shuffle });
   }
 
-  private receive(message: PlayerMessage) {
-    if (message.type === 'pong') {
-      this.lastPong = Date.now();
-    } else if (message.type === 'ready') {
-      // A (re)connected phone has no audio buffered; stream again from the current position.
-      this.engine.restartStream();
-    } else if (message.type === 'progress') {
-      this.engine.report(message.streamId, message.position);
-      this.sender.progress(message.streamId, message.position);
-      if (message.streamId === this.sender.streamId) this.patch({ phoneBuffer: message.buffered });
-    } else if (message.type === 'ended') {
-      this.engine.ended(message.streamId);
+  private async ensureMedia() {
+    const connection = this.connection;
+    const stream = this.engine.stream;
+    if (!connection?.open || !stream || this.mediaNegotiating || this.state.streaming) return;
+    const pc = connection.peerConnection;
+    if (pc.signalingState !== 'stable') return;
+    this.mediaNegotiating = true;
+    clearTimeout(this.mediaRetryTimer);
+    try {
+      if (!this.mediaSender) {
+        const track = stream.getAudioTracks()[0];
+        if (!track) throw new Error('No audio track is available.');
+        this.mediaSender = pc.addTrack(track, stream);
+        // Some engines expose encoding parameters only after negotiation.
+        // Keep negotiating if the early safety cap is not available yet;
+        // configureAudio applies it again before playback can ramp up.
+        await this.setSenderBitrate(this.mediaSender, AUDIO_START_BITRATE).catch(() => {});
+      }
+      const offer = await pc.createOffer();
+      const sdp = stereoOpusSdp(offer.sdp ?? '');
+      await pc.setLocalDescription({ type: 'offer', sdp });
+      if (this.connection !== connection) return;
+      this.send({ type: 'media-offer', sdp: pc.localDescription?.sdp ?? sdp });
+      this.scheduleMediaNegotiationRetry(connection, pc, 5000);
+    } catch (error) {
+      this.patch({ error: errorMessage(error), streaming: false });
+      this.send({ type: 'error', message: 'Audio negotiation failed. Retrying…' });
+      this.scheduleMediaNegotiationRetry(connection, pc);
     }
   }
+
+  private async acceptMediaAnswer(sdp: string) {
+    const connection = this.connection;
+    if (!connection?.open || !this.mediaNegotiating) return;
+    const pc = connection.peerConnection;
+    try {
+      await pc.setRemoteDescription({ type: 'answer', sdp });
+      if (this.connection !== connection) return;
+      clearTimeout(this.mediaRetryTimer);
+      this.mediaNegotiating = false;
+      this.patch({ streaming: true, error: null });
+      await this.configureAudio(pc);
+    } catch (error) {
+      this.patch({ streaming: false, error: errorMessage(error) });
+      this.send({ type: 'error', message: 'Audio negotiation failed. Retrying…' });
+      this.scheduleMediaNegotiationRetry(connection, pc);
+    }
+  }
+
+  private scheduleMediaNegotiationRetry(connection: DataConnection, pc: RTCPeerConnection, delay = 1500) {
+    clearTimeout(this.mediaRetryTimer);
+    this.mediaRetryTimer = setTimeout(() => {
+      void (async () => {
+        if (this.connection !== connection || !connection.open || this.state.streaming) return;
+        if (pc.signalingState === 'have-local-offer') {
+          try { await pc.setLocalDescription({ type: 'rollback' }); } catch { /* The next ready message can retry. */ }
+        }
+        this.mediaNegotiating = false;
+        await this.ensureMedia();
+      })();
+    }, delay);
+  }
+
+  private async configureAudio(pc: RTCPeerConnection) {
+    try {
+      const sender = pc.getSenders().find((sender) => sender.track?.kind === 'audio');
+      if (!sender) throw new Error('No audio sender');
+      this.mediaSender = sender;
+      await this.setSenderBitrate(sender, AUDIO_START_BITRATE);
+      const answer = pc.remoteDescription?.sdp ?? '';
+      const stereo = /(?:^|[; ])stereo=1(?:;|\r?$)/m.test(answer);
+      if (this.connection?.peerConnection !== pc) return;
+      this.patch({ quality: stereo ? 'Opus stereo · 32 → 128 kbps ramp' : '32 → 128 kbps ramp · stereo unconfirmed' });
+      if (this.engine.snapshot.phase === 'playing') this.startBitrateRamp();
+    } catch {
+      if (this.connection?.peerConnection === pc) this.patch({ quality: 'This browser could not enforce the 128 kbps cap.' });
+    }
+  }
+
+  private async setSenderBitrate(sender: RTCRtpSender, bitrate: number) {
+    const params = sender.getParameters();
+    if (!params.encodings?.length) throw new Error('No audio encoding');
+    params.encodings.forEach((encoding) => { encoding.maxBitrate = bitrate; });
+    await sender.setParameters(params);
+  }
+
+  private startBitrateRamp() {
+    clearTimeout(this.bitrateRampTimer);
+    const sender = this.mediaSender;
+    const connection = this.connection;
+    if (!sender || !connection?.open) return;
+    void this.setSenderBitrate(sender, AUDIO_START_BITRATE).catch(() => {});
+    this.bitrateRampTimer = setTimeout(() => {
+      if (this.mediaSender !== sender || this.connection !== connection || !connection.open || this.engine.snapshot.phase !== 'playing') return;
+      void this.setSenderBitrate(sender, AUDIO_BITRATE).catch(() => {
+        if (this.mediaSender === sender) this.patch({ quality: 'This browser could not enforce the 128 kbps cap.' });
+      });
+    }, AUDIO_RAMP_DELAY_MS);
+  }
+
+  private resetBitrateRamp() {
+    clearTimeout(this.bitrateRampTimer);
+    const sender = this.mediaSender;
+    if (sender) void this.setSenderBitrate(sender, AUDIO_START_BITRATE).catch(() => {});
+  }
+
+  enableAudio = async () => {
+    try {
+      await this.engine.unlock();
+      if (this.disposed) return;
+      this.patch({ audioReady: this.engine.ready, error: null });
+      this.ensureMedia();
+    } catch (error) { this.patch({ error: errorMessage(error) }); }
+  };
 
   openFolder = async () => {
     if (!window.isSecureContext || !('showDirectoryPicker' in window)) {
@@ -232,7 +325,10 @@ export class HostSession extends Store<HostState> {
     }
     this.patch({ scanning: true, scanCount: 0, error: null });
     try {
+      // Both APIs are invoked before awaiting, while the click is still active.
+      const unlocking = this.enableAudio();
       const directory = await window.showDirectoryPicker({ mode: 'read', id: 'airside-library', startIn: 'music' });
+      await unlocking;
       if (this.disposed) return;
       this.scan?.abort();
       const scan = new AbortController();
@@ -245,6 +341,7 @@ export class HostSession extends Store<HostState> {
       if (this.state.shuffle) this.lastShuffleOrder = this.localTracks.map((track) => track.id);
       this.patch({ folder: directory.name, tracks: this.localTracks.map(publicTrack), skipped, error: null });
       this.sendLibrary();
+      this.ensureMedia();
     } catch (error) {
       if (!(error instanceof DOMException && error.name === 'AbortError')) this.patch({ error: errorMessage(error) });
     } finally { if (!this.disposed) this.patch({ scanning: false }); }
@@ -286,12 +383,21 @@ export class HostSession extends Store<HostState> {
     void this.engine.select(this.localTracks[next]);
   }
 
+  private closeMedia() {
+    clearTimeout(this.mediaRetryTimer);
+    clearTimeout(this.bitrateRampTimer);
+    this.mediaSender = null;
+    this.mediaNegotiating = false;
+    this.patch({ streaming: false, quality: null });
+  }
+
   disconnect = () => {
     const connection = this.connection;
     this.connection = null;
+    this.closeMedia();
     connection?.close();
     this.engine.pause();
-    this.patch({ connected: false, phoneBuffer: null });
+    this.patch({ connected: false });
   };
 
   destroy() {
@@ -303,7 +409,6 @@ export class HostSession extends Store<HostState> {
     this.disconnect();
     this.peer?.destroy();
     this.engine.destroy();
-    this.sender.destroy();
   }
 }
 
@@ -314,13 +419,9 @@ export interface PlayerState {
   folder: string;
   loadingLibrary: boolean;
   playback: Playback;
-  /** The audio pipeline exists, so a tap can start sound. */
   streamReady: boolean;
   audioEnabled: boolean;
-  /** Seconds of audio buffered ahead of playback. */
-  buffered: number | null;
-  /** Playback is held until the network delivers enough audio. */
-  buffering: boolean;
+  bitrateKbps: number | null;
   volume: number;
   error: string | null;
 }
@@ -329,27 +430,24 @@ export class PlayerSession extends Store<PlayerState> {
   private peer: Peer | null = null;
   private connection: DataConnection | null = null;
   private audio = new Audio();
-  private player: StreamPlayer;
   private timer?: ReturnType<typeof setInterval>;
+  private playbackTimer?: ReturnType<typeof setInterval>;
+  private playbackTick = 0;
   private lastMessage = 0;
   private pendingTracks: Track[] = [];
   private receivedError = false;
   private generation = 0;
+  private bitrateSample: ByteSample | null = null;
+  private measuringBitrate = false;
   private volumeFrame = 0;
   private volumeTarget = 1;
   private signalingReconnectTimer?: ReturnType<typeof setTimeout>;
-  private lastProgress = 0;
-  private endedStream = -1;
-  private local: StreamStatus | null = null;
+  private mediaRetryTimer?: ReturnType<typeof setTimeout>;
 
   constructor(private hostId: string, private token: string) {
-    super({ status: 'connecting', tracks: [], folder: '', loadingLibrary: false, shuffle: false, playback: { ...emptyPlayback }, streamReady: false, audioEnabled: false, buffered: null, buffering: false, volume: 1, error: null });
+    super({ status: 'connecting', tracks: [], folder: '', loadingLibrary: false, shuffle: false, playback: { ...emptyPlayback }, streamReady: false, audioEnabled: false, bitrateKbps: null, volume: 1, error: null });
     this.audio.setAttribute('playsinline', '');
     this.audio.autoplay = true;
-    this.player = new StreamPlayer(this.audio, (status) => this.streamStatus(status), (error) => this.patch({ error }));
-    // Lets iOS keep playing with the screen locked or the ringer switched off.
-    const session = (navigator as Navigator & { audioSession?: { type: string } }).audioSession;
-    if (session) try { session.type = 'playback'; } catch { /* Optional. */ }
   }
 
   start = () => {
@@ -360,7 +458,9 @@ export class PlayerSession extends Store<PlayerState> {
       this.patch({ status: 'disconnected', error: 'Open the player link or scan the QR code on your desktop to connect.' });
       return;
     }
-    this.patch({ status: 'connecting', error: null, buffered: null, buffering: false });
+    this.bitrateSample = null;
+    this.playbackTick = performance.now();
+    this.patch({ status: 'connecting', error: null, audioEnabled: false, streamReady: false, bitrateKbps: null });
     this.lastMessage = Date.now();
     const peer = new Peer();
     this.peer = peer;
@@ -373,6 +473,16 @@ export class PlayerSession extends Store<PlayerState> {
       }
       const connection = peer.connect(this.hostId, { reliable: true, metadata: { token: this.token, version: PROTOCOL_VERSION } });
       this.connection = connection;
+      connection.peerConnection.addEventListener('track', (event) => {
+        if (generation !== this.generation || this.connection !== connection || event.track.kind !== 'audio') return;
+        const stream = event.streams[0] ?? new MediaStream([event.track]);
+        this.audio.srcObject = stream;
+        this.bitrateSample = null;
+        this.receivedError = false;
+        clearTimeout(this.mediaRetryTimer);
+        this.patch({ streamReady: true, bitrateKbps: null, error: null });
+        void this.enableAudio();
+      });
       connection.on('data', (data: unknown) => { if (generation === this.generation) this.receive(data); });
       connection.on('close', () => { if (generation === this.generation) this.lost(); });
       connection.on('error', (error) => { if (generation === this.generation) this.lost(peerError(error)); });
@@ -393,10 +503,12 @@ export class PlayerSession extends Store<PlayerState> {
       else this.lost();
     });
     this.timer = setInterval(() => {
+      void this.measureBitrate();
       if (Date.now() - this.lastMessage > 20000) this.lost(this.state.status === 'connecting'
         ? 'Connection timed out. Check that the desktop is online. Some networks block direct connections.'
         : 'Desktop connection lost. Keep its tab open and tap Reconnect.');
     }, 1000);
+    this.playbackTimer = setInterval(() => this.advancePlaybackClock(), 250);
   };
 
   private scheduleSignalingReconnect(peer: Peer, generation: number) {
@@ -407,47 +519,31 @@ export class PlayerSession extends Store<PlayerState> {
     }, 750);
   }
 
-  private send(message: PlayerMessage | Command) {
-    if (!this.connection?.open) return;
-    try { this.connection.send(message); } catch { /* The connection watchdog reports failures. */ }
+  private scheduleMediaRetry(generation: number) {
+    clearTimeout(this.mediaRetryTimer);
+    this.mediaRetryTimer = setTimeout(() => {
+      if (generation === this.generation && this.state.status === 'connected' && this.connection?.open && !this.state.streamReady) {
+        this.connection.send({ type: 'ready' });
+      }
+    }, 1500);
   }
 
-  /** Status of the stream the phone is actually playing, from the audio worklet. */
-  private streamStatus(status: StreamStatus) {
-    this.local = status;
-    const playback = this.state.playback;
-    const current = status.trackId === playback.trackId;
-    this.patch({
-      buffered: status.buffered,
-      buffering: status.waiting && playback.phase === 'playing' && !status.finished,
-      ...(current ? { playback: { ...playback, position: Math.min(playback.duration || Infinity, status.position) } } : {}),
-    });
+  private advancePlaybackClock() {
     const now = performance.now();
-    if (now - this.lastProgress > 500) {
-      this.lastProgress = now;
-      this.send({ type: 'progress', streamId: status.streamId, position: status.position, buffered: status.buffered });
-    }
-    if (status.finished && this.endedStream !== status.streamId) {
-      this.endedStream = status.streamId;
-      this.send({ type: 'progress', streamId: status.streamId, position: status.position, buffered: 0 });
-      this.send({ type: 'ended', streamId: status.streamId });
-    }
+    const elapsed = Math.max(0, (now - this.playbackTick) / 1000);
+    this.playbackTick = now;
+    const playback = this.state.playback;
+    if (playback.phase !== 'playing' || !playback.duration || elapsed <= 0) return;
+    const position = Math.min(playback.duration, playback.position + elapsed);
+    if (position !== playback.position) this.patch({ playback: { ...playback, position } });
   }
 
   private receive(data: unknown) {
     if (!isRecord(data)) return;
     this.lastMessage = Date.now();
-    if (isAudioBatch(data)) {
-      this.player.push(data);
-    } else if (isStreamStart(data)) {
-      this.local = null;
-      this.player.start(data);
-      if (!this.state.streamReady) this.patch({ streamReady: true });
-    } else if (data.type === 'stream-end' && typeof data.streamId === 'number') {
-      this.player.end(data.streamId);
-    } else if (data.type === 'welcome' && data.version === PROTOCOL_VERSION) {
+    if (data.type === 'welcome' && data.version === PROTOCOL_VERSION) {
       this.patch({ status: 'connected', error: null });
-      this.send({ type: 'ready' });
+      this.connection?.send({ type: 'ready' });
     } else if (data.type === 'library-start' && typeof data.folder === 'string') {
       this.pendingTracks = [];
       this.patch({ folder: data.folder, loadingLibrary: true });
@@ -457,41 +553,81 @@ export class PlayerSession extends Store<PlayerState> {
       this.patch({ tracks: this.pendingTracks, loadingLibrary: false });
     } else if (data.type === 'shuffle' && typeof data.enabled === 'boolean') {
       this.patch({ shuffle: data.enabled });
+    } else if (data.type === 'media-offer' && typeof data.sdp === 'string') {
+      void this.acceptMediaOffer(data.sdp);
     } else if (data.type === 'state' && isPlayback(data.playback)) {
-      const playback = { ...data.playback };
-      const stream = this.player.currentStream;
-      if (stream && playback.trackId !== stream.trackId) {
-        // The desktop moved on (new track, decode error); drop audio of the old one.
-        this.player.clear();
-        this.local = null;
-      }
-      // The phone's own clock is the most accurate position for the audio it is playing.
-      const local = this.local;
-      if (local && this.player.currentStream?.streamId === local.streamId && local.trackId === playback.trackId) {
-        playback.position = Math.min(playback.duration || Infinity, local.position);
-      }
-      this.player.setPlaying(playback.phase === 'playing');
-      this.patch({ playback, ...(playback.phase !== 'playing' ? { buffering: false } : {}) });
+      this.playbackTick = performance.now();
+      const started = data.playback.phase === 'playing' && this.state.playback.phase !== 'playing';
+      if (started) this.bitrateSample = null;
+      this.patch({ playback: data.playback, ...(started || data.playback.phase !== 'playing' ? { bitrateKbps: null } : {}) });
       this.updateMediaSession();
     } else if (data.type === 'error' && typeof data.message === 'string') {
       this.receivedError = true;
       this.patch({ error: data.message });
+      if (data.message.startsWith('Audio negotiation')) this.scheduleMediaRetry(this.generation);
     } else if (data.type === 'ping') {
-      this.send({ type: 'pong' });
+      this.connection?.send({ type: 'pong' });
+    }
+  }
+
+  private async acceptMediaOffer(sdp: string) {
+    const connection = this.connection;
+    if (!connection?.open) return;
+    const pc = connection.peerConnection;
+    try {
+      await pc.setRemoteDescription({ type: 'offer', sdp });
+      const answer = await pc.createAnswer();
+      const answerSdp = stereoOpusSdp(answer.sdp ?? '');
+      await pc.setLocalDescription({ type: 'answer', sdp: answerSdp });
+      if (this.connection !== connection) return;
+      connection.send({ type: 'media-answer', sdp: pc.localDescription?.sdp ?? answerSdp });
+    } catch (error) {
+      this.patch({ error: `Audio negotiation failed: ${errorMessage(error)}`, streamReady: false });
+      this.scheduleMediaRetry(this.generation);
     }
   }
 
   enableAudio = async () => {
+    if (!this.audio.srcObject) return;
     try {
-      const running = await this.player.resume();
-      this.patch({ audioEnabled: running, streamReady: true });
+      await this.audio.play();
+      this.patch({ audioEnabled: true });
     } catch { this.patch({ audioEnabled: false }); }
   };
+
+  private async measureBitrate() {
+    const connection = this.connection;
+    if (!connection?.open || !this.state.streamReady || this.measuringBitrate || this.state.playback.phase !== 'playing') return;
+    this.measuringBitrate = true;
+    try {
+      const stats = await connection.peerConnection.getStats();
+      if (this.connection !== connection) return;
+      let bytes = 0;
+      let timestamp = 0;
+      let found = false;
+      stats.forEach((report) => {
+        const inbound = report as RTCInboundRtpStreamStats & { kind?: string; mediaType?: string };
+        if (inbound.type !== 'inbound-rtp' || (inbound.kind !== 'audio' && inbound.mediaType !== 'audio') || typeof inbound.bytesReceived !== 'number') return;
+        bytes += inbound.bytesReceived;
+        timestamp = Math.max(timestamp, inbound.timestamp);
+        found = true;
+      });
+      if (!found) return;
+      const sample = { bytes, timestamp };
+      const bitrateKbps = this.bitrateSample ? measuredBitrateKbps(this.bitrateSample, sample) : null;
+      this.bitrateSample = sample;
+      if (bitrateKbps !== null && this.state.playback.phase === 'playing') this.patch({ bitrateKbps });
+    } catch {
+      // Stats are optional and can be unavailable while WebRTC is reconnecting.
+    } finally {
+      this.measuringBitrate = false;
+    }
+  }
 
   command = (command: Command) => {
     if (!this.connection?.open || this.state.status !== 'connected') return;
     if (['play', 'next', 'previous', 'seek'].includes(command.type)) void this.enableAudio();
-    this.send(command);
+    this.connection.send(command);
   };
 
   adjustVolume = (change: number) => {
@@ -526,12 +662,15 @@ export class PlayerSession extends Store<PlayerState> {
     const error = message ?? (this.receivedError ? this.state.error : 'Desktop disconnected. Keep its tab open and tap Reconnect.');
     this.cleanup();
     ++this.generation;
-    this.patch({ status: 'disconnected', buffered: null, buffering: false, error, playback: { ...this.state.playback, phase: 'paused' } });
+    this.bitrateSample = null;
+    this.patch({ status: 'disconnected', streamReady: false, audioEnabled: false, bitrateKbps: null, error, playback: { ...this.state.playback, phase: 'paused' } });
   }
 
   private cleanup() {
     clearInterval(this.timer);
+    clearInterval(this.playbackTimer);
     clearTimeout(this.signalingReconnectTimer);
+    clearTimeout(this.mediaRetryTimer);
     const connection = this.connection;
     this.connection = null;
     // Remove listeners before closing so deliberate cleanup cannot trigger lost().
@@ -540,19 +679,14 @@ export class PlayerSession extends Store<PlayerState> {
     connection?.close();
     this.peer?.destroy();
     this.peer = null;
-    // Keep the audio pipeline (and the user's audio permission) for the next connection.
-    this.player.setPlaying(false);
-    this.player.clear();
-    this.local = null;
+    this.audio.pause();
+    this.audio.srcObject = null;
   }
 
   destroy() {
     ++this.generation;
     cancelAnimationFrame(this.volumeFrame);
     this.cleanup();
-    this.player.destroy();
-    this.audio.pause();
-    this.audio.srcObject = null;
     if ('mediaSession' in navigator) {
       navigator.mediaSession.metadata = null;
       for (const action of ['play', 'pause', 'nexttrack', 'previoustrack'] as const) {

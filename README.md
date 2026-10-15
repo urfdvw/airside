@@ -1,6 +1,6 @@
 # Airside
 
-Airside is a pure frontend app that streams music from a folder on a desktop browser to a mobile browser. The files never upload to an application server: the desktop reads and decodes them locally, and a WebRTC data channel sends the encoded audio directly to the phone, which buffers it like an online music player.
+Airside is a pure frontend app that streams music from a folder on a desktop browser to a mobile browser. The files never upload to an application server: the desktop reads and decodes them locally, and WebRTC sends an audio stream directly to the phone.
 
 Open the app at [urfdvw.github.io/airside](https://urfdvw.github.io/airside/).
 
@@ -26,21 +26,18 @@ The production pairing QR uses `https://urfdvw.github.io/airside/`. In developme
 ## How it works
 
 - `showDirectoryPicker()` grants read-only access to a folder and its subfolders.
-- The desktop decodes the selected audio file to 48 kHz PCM with Web Audio (an `OfflineAudioContext`, so no click is needed to enable audio and nothing plays on its speakers).
-- If the browser cannot decode a file (or it is a format no browser decodes: `.ape`, `.wv`, `.tak`, `.wma`, `.dsf`, `.dff`), Airside falls back to a WebAssembly decoder built from [libav.js](https://github.com/Yahweasel/libav.js) (FFmpeg). It is loaded on demand in a Web Worker the first time a file needs it, so MP3, AAC, FLAC and other natively supported files never download it. The worker reads the file in blocks, decodes the first audio stream, resamples it with libswresample to planar Float32 at 48 kHz (DSD is always resampled), and hands the PCM back to build an `AudioBuffer`. Playback, seeking and progress then work exactly as for native files.
+- The desktop decodes the selected audio file with Web Audio and routes it only to a `MediaStreamAudioDestinationNode`, never to its speakers.
+- If the browser cannot decode a file (or it is a format no browser decodes: `.ape`, `.wv`, `.tak`, `.wma`, `.dsf`, `.dff`), Airside falls back to a WebAssembly decoder built from [libav.js](https://github.com/Yahweasel/libav.js) (FFmpeg). It is loaded on demand in a Web Worker the first time a file needs it, so MP3, AAC, FLAC and other natively supported files never download it. The worker reads the file in blocks, decodes the first audio stream, resamples it with libswresample to planar Float32 at the `AudioContext` rate (48 kHz; DSD is always resampled), and hands the PCM back to build an `AudioBuffer`. Playback, seeking and progress then work exactly as for native files.
 - The fallback decoder adds ALAC (`.m4a`, `.caf`), Monkey's Audio (`.ape`), WavPack (`.wv`), TAK (`.tak`), WMA 1/2, WMA Pro and WMA Lossless (`.wma`), and DSD (`.dsf`, `.dff`). It is single-threaded, because GitHub Pages cannot send the COOP/COEP headers that `SharedArrayBuffer` needs. If neither decoder can read a file, the desktop and the phone both show an error for that track.
 - Every track is decoded completely into memory before it plays, for native and fallback decoding alike. Long or high-resolution tracks can therefore use hundreds of megabytes; streaming decode is not implemented yet.
 - PeerJS's default public cloud service handles signaling. The app has no custom server, API, or database.
-- A single reliable PeerJS data connection carries the file list, playback commands, status, and the audio itself.
-- Audio is streamed like an online music player rather than as a real-time call. The desktop encodes the decoded track with WebCodecs `AudioEncoder` to 128 kbps stereo Opus (20 ms packets) and sends the packets in half-second batches as fast as the connection allows, up to 30 seconds ahead of the phone's playback position. It keeps the data channel's send queue short, so commands and status messages never wait behind much audio.
-- The phone decodes the packets with a small WebAssembly Opus decoder ([opus-decoder](https://github.com/eshaz/wasm-audio-decoders), MIT; libopus, BSD), loaded only on the phone, and plays them from a buffer in an `AudioWorklet` at its own audio clock. The output goes through a `MediaStream` into an `<audio>` element so the system treats it as media playback.
-- Network trouble never changes the playback speed. Playback starts after 1 second is buffered. If the buffer runs dry, the phone goes silent, shows "Buffering…", and continues from exactly where it stopped once 4 seconds have arrived. Nothing is skipped or time-stretched.
-- The phone's audio clock is the playback clock: it reports its position (and buffer level) to the desktop twice a second, and reports when a track has finished so the desktop can move to the next one. Seeking or changing tracks starts a new stream from the new position; pausing just stops the phone's playback, while its buffer is kept and keeps filling.
+- A PeerJS data connection carries the file list, playback commands, progress, status, and audio renegotiation messages.
+- The desktop adds a one-way Opus stereo track to that connection’s established WebRTC transport. Each playback starts at 32 kbps and rises to a 128 kbps sender cap after two seconds.
 - Shuffle reorders the authoritative playlist on both devices without interrupting the active track; turning it off restores natural filename order.
 - A random four-letter PIN determines the temporary PeerJS host ID and authorizes one player connection for the current desktop page session.
 - The login page accepts that PIN or scans the same direct-player QR shown on the desktop.
 
-The public PeerJS service requires internet access and has availability and usage limits. WebRTC may fail on restrictive or symmetric-NAT networks because this app does not provide a custom TURN relay. Buffering absorbs stalls and uneven throughput, but the connection still has to average more than about 130 kbit/s; on a slower link playback keeps pausing to rebuffer. The desktop needs WebCodecs Opus encoding (current Chrome or Edge); the phone needs `AudioWorklet` support.
+The public PeerJS service requires internet access and has availability and usage limits. WebRTC may fail on restrictive or symmetric-NAT networks because this app does not provide a custom TURN relay. The 128 kbps value is a target/cap; the browser and network can adapt below it.
 
 ## Fallback decoder build and licenses
 
